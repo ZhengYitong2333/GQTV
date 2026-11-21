@@ -20,6 +20,8 @@
             <Switch android:id="@+id/switch_grid" style="@style/TvRow.Switch" android:text="@string/title_grid" />
             <View style="@style/TvRule" />
             <Switch android:id="@+id/switch_boot_startup" style="@style/TvRow.Switch" android:text="@string/title_boot_startup" />
+            <View style="@style/TvRule" />
+            <Button android:id="@+id/resolution" style="@style/TvRow" android:text="@string/resolution_title" android:drawableEnd="@drawable/tv_chevron" />
             <View style="@style/TvRule" android:layout_marginTop="6dp" android:layout_marginBottom="3dp" />
             <Button android:id="@+id/more" style="@style/TvRow" android:text="@string/more_settings" android:drawableEnd="@drawable/tv_chevron" />
         </LinearLayout>

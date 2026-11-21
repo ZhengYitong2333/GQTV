@@ -115,6 +115,8 @@ class MainActivity : FragmentActivity(), Request.RequestListener, OnSharedPrefer
 
     fun selectChannel(channel: TVViewModel, userTune: Boolean) = player.select(channel, userTune)
     fun play(channel: TVViewModel) = player.play(channel)
+    fun tryBackup(channel: TVViewModel) = player.tryBackup(channel)
+    internal fun playbackSettings() = player
     fun play(position: Int) = browser.play(position)
 
     private fun openBrowser() {

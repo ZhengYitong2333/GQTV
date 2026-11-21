@@ -50,6 +50,12 @@ class SettingFragment : DialogFragment() {
         bindSwitch(ui.switchGrid, SP.grid) { SP.grid = it }
         bindSwitch(ui.switchBootStartup, SP.bootStartup) { SP.bootStartup = it }
 
+        ui.resolution.setOnClickListener {
+            if (!childFragmentManager.isStateSaved &&
+                childFragmentManager.findFragmentByTag(ResolutionFragment.TAG) == null) {
+                ResolutionFragment().show(childFragmentManager, ResolutionFragment.TAG)
+            }
+        }
         ui.more.setOnClickListener { showPage(true, R.id.check_version) }
         ui.checkVersion.setOnClickListener { checkUpdate(ui) }
         ui.clear.setOnClickListener {

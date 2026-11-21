@@ -60,7 +60,12 @@ class MainFragment : Fragment(R.layout.menu) {
             }
             channel.ready.observe(viewLifecycleOwner) { if (index == current) playIfReady(channel) }
             channel.errInfo.observe(viewLifecycleOwner) { message ->
-                if (index == current) host.setPlaybackError(message.orEmpty())
+                if (index != current) return@observe
+                if (!message.isNullOrEmpty() && host.tryBackup(channel)) {
+                    Request.stopPlaybackRequests()
+                } else {
+                    host.setPlaybackError(message.orEmpty())
+                }
             }
             channel.epg.observe(viewLifecycleOwner) {
                 if (index == current && !isHidden) renderProgram()

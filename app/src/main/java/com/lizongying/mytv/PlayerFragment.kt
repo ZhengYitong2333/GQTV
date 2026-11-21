@@ -2,10 +2,15 @@ package com.lizongying.mytv
 
 import android.os.Bundle
 import android.view.View
+import androidx.annotation.OptIn
 import androidx.fragment.app.Fragment
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import com.lizongying.mytv.databinding.PlayerBinding
 import com.lizongying.mytv.models.TVViewModel
@@ -15,8 +20,12 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     private var player: ExoPlayer? = null
     private var channel: TVViewModel? = null
     private var media: MediaItem? = null
+    private var usingBackup = false
+    private var selectedHeight: Int? = null
     private var failures = 0
-    private val retry = Runnable { channel?.changed("retry") }
+    private val retry = Runnable {
+        if (usingBackup) prepareMedia() else channel?.changed("retry")
+    }
 
     override fun onViewCreated(view: View, state: Bundle?) {
         binding = PlayerBinding.bind(view)
@@ -34,24 +43,81 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     }
 
     fun select(model: TVViewModel, userTune: Boolean) {
-        if (channel !== model) {
+        if (channel !== model || userTune) {
+            view?.removeCallbacks(retry)
             channel = model
             media = null
+            usingBackup = false
+            selectedHeight = null
+            failures = 0
+            setVideoTrack(null)
             player?.stop()
             player?.clearMediaItems()
-        }
-        if (userTune) {
-            view?.removeCallbacks(retry)
-            failures = 0
         }
     }
 
     fun play(model: TVViewModel) {
-        if (channel !== model) return
+        if (channel !== model || usingBackup) return
         val index = model.videoIndex.value ?: return
         val url = model.videoUrl.value?.getOrNull(index) ?: return
         media = MediaItem.fromUri(url)
         prepareMedia()
+    }
+
+    fun tryBackup(model: TVViewModel): Boolean {
+        if (channel !== model || usingBackup || model.getTV().pid.isEmpty()) return false
+        val url = iptvOrgStreams[model.getTV().alias] ?: return false
+        view?.removeCallbacks(retry)
+        usingBackup = true
+        failures = 0
+        setVideoTrack(null)
+        media = MediaItem.fromUri(url)
+        prepareMedia()
+        return true
+    }
+
+    internal fun videoResolution(): Pair<Int, Int>? = player?.videoSize?.let {
+        if (it.width > 0 && it.height > 0) it.width to it.height else null
+    }
+
+    internal fun resolutionSelection(): Int? = selectedHeight
+    internal fun isUsingBackup() = usingBackup
+
+    @OptIn(UnstableApi::class)
+    internal fun resolutionOptions(): List<Pair<Int, Int>> = videoTracks().distinctBy { it.first }
+        .sortedByDescending { it.first }.map { (_, override) ->
+            val format = override.mediaTrackGroup.getFormat(override.trackIndices.first())
+            format.width to format.height
+        }
+
+    @OptIn(UnstableApi::class)
+    internal fun setResolution(height: Int?): Boolean {
+        val track = height?.let { requested -> videoTracks().firstOrNull { it.first == requested }?.second }
+        if (height != null && track == null) return false
+        selectedHeight = height
+        setVideoTrack(track)
+        return true
+    }
+
+    @OptIn(UnstableApi::class)
+    private fun videoTracks(): List<Pair<Int, TrackSelectionOverride>> =
+        player?.currentTracks?.groups.orEmpty()
+            .filter { it.type == C.TRACK_TYPE_VIDEO }
+            .flatMap { group ->
+                (0 until group.length)
+                    .filter {
+                        val format = group.getTrackFormat(it)
+                        group.isTrackSupported(it) && format.width > 0 && format.height > 0
+                    }
+                    .groupBy { group.getTrackFormat(it).height }
+                    .map { (height, indices) -> height to TrackSelectionOverride(group.mediaTrackGroup, indices) }
+            }
+
+    private fun setVideoTrack(track: TrackSelectionOverride?) {
+        val engine = player ?: return
+        val builder = engine.trackSelectionParameters.buildUpon().clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+        if (track != null) builder.setOverrideForType(track)
+        engine.trackSelectionParameters = builder.build()
     }
 
     private fun prepareMedia() {
@@ -63,7 +129,9 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     }
 
     override fun onPlayerError(error: PlaybackException) {
+        val currentMedia = media
         channel?.setErrInfo("播放错误")
+        if (media !== currentMedia) return
         if (failures < 3) {
             view?.removeCallbacks(retry)
             view?.postDelayed(retry, 1_000L shl failures)
@@ -77,6 +145,12 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
             view?.removeCallbacks(retry)
             channel?.setErrInfo("")
         }
+    }
+
+    override fun onTracksChanged(tracks: Tracks) {
+        if (tracks.isEmpty) return
+        val height = selectedHeight ?: return
+        if (!setResolution(height)) setResolution(null)
     }
 
     override fun onStop() {

@@ -1,5 +1,6 @@
 package com.lizongying.mytv
 
+import android.app.AlertDialog
 import android.graphics.Bitmap
 import android.os.SystemClock
 import android.view.KeyEvent
@@ -177,7 +178,7 @@ class TvRemoteTest {
     private fun openMoreSettings() {
         key(KeyEvent.KEYCODE_MENU)
         focus(R.id.switch_channel_reversal)
-        key(KeyEvent.KEYCODE_DPAD_DOWN, 5)
+        key(KeyEvent.KEYCODE_DPAD_DOWN, 6)
         focus(R.id.more)
         key(KeyEvent.KEYCODE_DPAD_CENTER)
         focus(R.id.check_version)
@@ -271,6 +272,48 @@ class TvRemoteTest {
         assertEquals(1, entries.currentProgramIndex(200))
         assertEquals(1, entries.currentProgramIndex(299))
         assertEquals(2, entries.currentProgramIndex(301))
+    }
+
+    @Test fun resolutionMenuSelectsSupportedTracksWithRemote() {
+        val assets = instrumentation.context.assets
+        val directory = File(instrumentation.targetContext.cacheDir, "resolution-test")
+        directory.mkdirs()
+        for (name in assets.list("resolution-test").orEmpty()) {
+            assets.open("resolution-test/" + name).use { input ->
+                File(directory, name).outputStream().use { output -> input.copyTo(output) }
+            }
+        }
+        catalog[documentaryIndex].videoUrl = listOf(File(directory, "master.m3u8").toURI().toString())
+        scenario.recreate()
+        awaitUi("both video resolutions") {
+            it.playbackSettings().resolutionOptions() == listOf(960 to 540, 480 to 270)
+        }
+        key(KeyEvent.KEYCODE_DPAD_RIGHT)
+        focus(R.id.switch_channel_reversal)
+        key(KeyEvent.KEYCODE_DPAD_DOWN, 5)
+        focus(R.id.resolution)
+        fun openResolutionDialog(selectedPosition: Int) {
+            key(KeyEvent.KEYCODE_DPAD_CENTER)
+            awaitUi("resolution dialog focus") {
+                val choice = settings(it)?.childFragmentManager?.findFragmentByTag(ResolutionFragment.TAG) as? ResolutionFragment
+                val dialog = choice?.dialog as? AlertDialog
+                dialog?.window?.decorView?.hasWindowFocus() == true &&
+                    dialog.listView.selectedItemPosition == selectedPosition
+            }
+        }
+        openResolutionDialog(0)
+        key(KeyEvent.KEYCODE_DPAD_DOWN)
+        key(KeyEvent.KEYCODE_DPAD_CENTER)
+        awaitUi("960 by 540 decoded frames") {
+            it.playbackSettings().resolutionSelection() == 540 && it.playbackSettings().videoResolution() == (960 to 540)
+        }
+        focus(R.id.resolution)
+        openResolutionDialog(1)
+        key(KeyEvent.KEYCODE_DPAD_DOWN)
+        key(KeyEvent.KEYCODE_DPAD_CENTER)
+        awaitUi("480 by 270 decoded frames") {
+            it.playbackSettings().resolutionSelection() == 270 && it.playbackSettings().videoResolution() == (480 to 270)
+        }
     }
 
     @Test fun idlePlaybackAvoidsMenuInflationAndReleasesTheDecoderOnStop() {
