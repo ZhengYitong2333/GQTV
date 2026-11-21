@@ -13,7 +13,8 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.FileProvider
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
-import com.lizongying.mytv.models.MyViewModel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -23,8 +24,6 @@ class UpdateWorker(context: Context, params: WorkerParameters) : CoroutineWorker
     private lateinit var notificationManager: NotificationManager
     private lateinit var notificationBuilder: NotificationCompat.Builder
 
-    private lateinit var myViewModel: MyViewModel
-
     override suspend fun doWork(): Result {
         val downloadUrl = inputData.getString("DOWNLOAD_URL") ?: return Result.failure()
         val apkFileName = inputData.getString("APK_FILENAME") ?: return Result.failure()
@@ -32,13 +31,12 @@ class UpdateWorker(context: Context, params: WorkerParameters) : CoroutineWorker
 
         showNotification(applicationContext)
 
-        val app = applicationContext as MyTVApplication
-        myViewModel = app.myViewModel
-
         return withContext(Dispatchers.IO) {
             try {
                 downloadAndInstall(applicationContext, downloadUrl, apkFileName, versionName)
                 Result.success()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Result.failure()
             }
@@ -69,7 +67,7 @@ class UpdateWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         notificationManager.notify(1, notificationBuilder.build())
     }
 
-    private fun downloadAndInstall(
+    private suspend fun downloadAndInstall(
         context: Context,
         downloadUrl: String,
         apkFileName: String,
@@ -90,33 +88,29 @@ class UpdateWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val downloadId = manager.enqueue(request)
 
-        var downloading = true
-        while (downloading) {
-            val query = DownloadManager.Query().setFilterById(downloadId)
-            val cursor = manager.query(query)
-            if (cursor.moveToFirst()) {
+        val query = DownloadManager.Query().setFilterById(downloadId)
+        var lastProgress = -1
+        while (true) {
+            val status = manager.query(query).use { cursor ->
+                check(cursor.moveToFirst()) { "Download removed" }
                 val bytesDownloaded =
-                    cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                    cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
                 val bytesTotal =
-                    cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                    cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
 
                 if (bytesTotal > 0) {
                     val progress = (bytesDownloaded * 100L / bytesTotal).toInt()
-                    Log.i(TAG, "progress $progress")
-//                    myViewModel.setDownloadProgress(progress)
-                    notificationBuilder.setProgress(100, progress, false)
-                    notificationManager.notify(1, notificationBuilder.build())
-                }
-
-                when (cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))) {
-                    DownloadManager.STATUS_SUCCESSFUL -> downloading = false
-                    DownloadManager.STATUS_FAILED -> {
-                        downloading = false
-                        throw Exception("Download failed")
+                    if (progress != lastProgress) {
+                        notificationBuilder.setProgress(100, progress, false)
+                        notificationManager.notify(1, notificationBuilder.build())
+                        lastProgress = progress
                     }
                 }
+                cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
             }
-            cursor.close()
+            if (status == DownloadManager.STATUS_SUCCESSFUL) break
+            check(status != DownloadManager.STATUS_FAILED) { "Download failed" }
+            delay(1_000)
         }
 
         notificationBuilder.setContentText("Download complete")
@@ -131,10 +125,7 @@ class UpdateWorker(context: Context, params: WorkerParameters) : CoroutineWorker
 
         if (apkFile.exists()) {
             val apkUri: Uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                FileProvider.getUriForFile(context, context.packageName + ".fileprovider", apkFile)
-                    .apply {
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    }
+                FileProvider.getUriForFile(context, context.packageName + ".provider", apkFile)
             } else {
                 Uri.parse("file://${apkFile.absolutePath}")
 //                Uri.fromFile(apkFile)

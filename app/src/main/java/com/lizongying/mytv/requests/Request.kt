@@ -72,10 +72,6 @@ object Request {
     private var initRetryTimes = 0
     private var initRetryMaxTimes = 0
 
-    fun onDestroy() {
-        Log.i(TAG, "onDestroy")
-    }
-
     private var call: Call<LiveInfo>? = null
     private var callToken: Call<Token2>? = null
     private var callAuth: Call<Auth>? = null
@@ -170,6 +166,7 @@ object Request {
             }
 
             override fun onFailure(call: Call<Token2>, t: Throwable) {
+                if (call.isCanceled) return
                 Log.e(TAG, "$title token request error $t")
                 if (tvModel.retryTimes < tvModel.retryMaxTimes) {
                     tvModel.retryTimes++
@@ -273,6 +270,7 @@ object Request {
             }
 
             override fun onFailure(call: Call<Auth>, t: Throwable) {
+                if (call.isCanceled) return
                 Log.e(TAG, "$title auth request error $t")
                 if (tvModel.retryTimes < tvModel.retryMaxTimes) {
                     tvModel.retryTimes++
@@ -468,6 +466,7 @@ object Request {
             }
 
             override fun onFailure(call: Call<LiveInfo>, t: Throwable) {
+                if (call.isCanceled) return
                 Log.e(TAG, "$title fetchVideo request error $t")
                 if (tvModel.retryTimes < tvModel.retryMaxTimes) {
                     tvModel.retryTimes++
@@ -533,6 +532,7 @@ object Request {
                 }
 
                 override fun onFailure(call: Call<Info>, t: Throwable) {
+                    if (call.isCanceled) return
                     Log.e(TAG, "info request error $t")
                     if (tvModel.tokenYSPRetryTimes < tvModel.tokenYSPRetryMaxTimes) {
                         tvModel.tokenYSPRetryTimes++
@@ -593,6 +593,7 @@ object Request {
                 }
 
                 override fun onFailure(call: Call<Info>, t: Throwable) {
+                    if (call.isCanceled) return
                     Log.e(TAG, "info request error $t")
                     if (tvModel.tokenYSPRetryTimes < tvModel.tokenYSPRetryMaxTimes) {
                         tvModel.tokenYSPRetryTimes++
@@ -654,6 +655,7 @@ object Request {
                 }
 
                 override fun onFailure(call: Call<Info>, t: Throwable) {
+                    if (call.isCanceled) return
                     Log.e(TAG, "info request error $t")
                     if (tvModel.tokenYSPRetryTimes < tvModel.tokenYSPRetryMaxTimes) {
                         tvModel.tokenYSPRetryTimes++
@@ -709,6 +711,7 @@ object Request {
             }
 
             override fun onFailure(call: Call<FAuth>, t: Throwable) {
+                if (call.isCanceled) return
                 Log.e(TAG, "auth request error $t")
                 if (tvModel.tokenFHRetryTimes < tvModel.tokenFHRetryMaxTimes) {
                     tvModel.tokenFHRetryTimes++
@@ -720,6 +723,12 @@ object Request {
                 }
             }
         })
+    }
+
+    fun stopPlaybackRequests() {
+        cancelCall()
+        if (Request::btraceRunnable.isInitialized) handler.removeCallbacks(btraceRunnable)
+        callBtracePage?.cancel()
     }
 
     fun fetchData(tvModel: TVViewModel) {
@@ -857,6 +866,7 @@ object Request {
             }
 
             override fun onFailure(call: Call<Void>, t: Throwable) {
+                if (call.isCanceled) return
                 Log.e(TAG, "$title kvcollect request error")
                 handler.postDelayed(btraceRunnable, 60 * 1000)
             }
@@ -904,6 +914,7 @@ object Request {
             }
 
             override fun onFailure(call: Call<Void>, t: Throwable) {
+                if (call.isCanceled) return
                 Log.e(TAG, "$title kvcollect request error")
                 handler.postDelayed(btraceRunnable, 60 * 1000)
             }
@@ -966,6 +977,7 @@ object Request {
             }
 
             override fun onFailure(call: Call<Void>, t: Throwable) {
+                if (call.isCanceled) return
                 Log.e(TAG, "$title kvcollect request error")
                 handler.postDelayed(btraceRunnable, 60 * 1000)
             }
@@ -1102,5 +1114,12 @@ object Request {
 
     fun setRequestListener(listener: RequestListener) {
         Request.listener = listener
+    }
+
+    fun clearListener(owner: RequestListener) {
+        if (listener === owner) {
+            listener = null
+            stopPlaybackRequests()
+        }
     }
 }

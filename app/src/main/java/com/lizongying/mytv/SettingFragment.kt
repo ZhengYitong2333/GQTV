@@ -1,254 +1,189 @@
 package com.lizongying.mytv
 
-import android.Manifest
-import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.Gravity
+import android.view.KeyEvent
 import android.view.LayoutInflater
 import android.view.View
-import android.view.View.GONE
-import android.view.View.VISIBLE
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.Switch
 import android.widget.Toast
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
+import androidx.core.view.children
+import androidx.core.view.doOnPreDraw
 import androidx.core.view.isVisible
-import androidx.core.view.marginEnd
-import androidx.core.view.marginTop
 import androidx.fragment.app.DialogFragment
+import androidx.lifecycle.lifecycleScope
 import com.lizongying.mytv.api.YSP
 import com.lizongying.mytv.databinding.SettingBinding
-
+import com.lizongying.mytv.requests.ReleaseRequest
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 class SettingFragment : DialogFragment() {
-
-    private var _binding: SettingBinding? = null
-    private val binding get() = _binding!!
-
-    private lateinit var updateManager: UpdateManager
-
-    override fun onStart() {
-        super.onStart()
-        dialog?.window?.apply {
-            addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
-            decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                attributes.layoutInDisplayCutoutMode =
-                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-                setAttributes(attributes)
-            }
-        }
-    }
+    private var binding: SettingBinding? = null
+    private var more = false
+    private var focusId = R.id.switch_channel_reversal
+    private var restoredFocus: Int? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setStyle(STYLE_NO_TITLE, 0)
+        more = savedInstanceState?.getBoolean("more") ?: false
+        focusId = savedInstanceState?.getInt("focus", focusId) ?: focusId
+        restoredFocus = savedInstanceState?.getInt("focus")
     }
 
-    override fun onCreateView(
-        inflater: LayoutInflater,
-        container: ViewGroup?,
-        savedInstanceState: Bundle?
-    ): View {
-        val context = requireContext() // It‘s safe to get context here.
-        _binding = SettingBinding.inflate(inflater, container, false)
-        binding.versionName.text = "当前版本: v${context.appVersionName}"
-        binding.version.text = "https://github.com/lizongying/my-tv"
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, state: Bundle?): View {
+        val ui = SettingBinding.inflate(inflater, container, false)
+        binding = ui
+        ui.keys.direction.setText(R.string.key_vertical)
+        ui.keys.move.setText(R.string.key_move)
+        ui.keys.confirm.setText(R.string.key_confirm)
+        ui.keys.back.setText(R.string.key_back)
+        ui.versionName.text = getString(R.string.version_label, requireContext().appVersionName)
+        bindSwitch(ui.switchChannelReversal, SP.channelReversal) { SP.channelReversal = it }
+        bindSwitch(ui.switchChannelNum, SP.channelNum) { SP.channelNum = it }
+        bindSwitch(ui.switchTime, SP.time) { SP.time = it }
+        bindSwitch(ui.switchGrid, SP.grid) { SP.grid = it }
+        bindSwitch(ui.switchBootStartup, SP.bootStartup) { SP.bootStartup = it }
 
-        binding.switchChannelReversal.run {
-            isChecked = SP.channelReversal
-            setOnCheckedChangeListener { _, isChecked ->
-                SP.channelReversal = isChecked
-                (activity as MainActivity).settingDelayHide()
+        ui.more.setOnClickListener { showPage(true, R.id.check_version) }
+        ui.checkVersion.setOnClickListener { checkUpdate(ui) }
+        ui.clear.setOnClickListener {
+            ConfirmationFragment.reset(getString(R.string.confirm_reset)).show(childFragmentManager, "confirm")
+        }
+        ui.exit.setOnClickListener { requireActivity().finishAffinity() }
+        showPage(more, focusId)
+        for (row in ui.preferences.children + ui.actions.children) {
+            if (row.isFocusable) row.setOnFocusChangeListener { view, focused ->
+                // The dialog can focus its first row while Android is tearing down the window.
+                if (focused && isResumed && view.hasWindowFocus()) focusId = view.id
             }
         }
-
-        binding.switchChannelNum.run {
-            isChecked = SP.channelNum
-            setOnCheckedChangeListener { _, isChecked ->
-                SP.channelNum = isChecked
-                (activity as MainActivity).settingDelayHide()
-            }
-        }
-
-        binding.switchTime.run {
-            isChecked = SP.time
-            setOnCheckedChangeListener { _, isChecked ->
-                SP.time = isChecked
-                (activity as MainActivity).settingDelayHide()
-            }
-        }
-
-        binding.switchBootStartup.run {
-            isChecked = SP.bootStartup
-            setOnCheckedChangeListener { _, isChecked ->
-                SP.bootStartup = isChecked
-                (activity as MainActivity).settingDelayHide()
-            }
-        }
-
-        binding.switchGrid.run {
-            isChecked = SP.grid
-            setOnCheckedChangeListener { _, isChecked ->
-                SP.grid = isChecked
-                (activity as MainActivity).settingDelayHide()
-            }
-        }
-
-        binding.checkVersion.setOnClickListener {
-            (activity as MainActivity).settingDelayHide()
-            requestInstallPermissions()
-        }
-
-        binding.clear.setOnClickListener {
-            (requireActivity() as MainActivity).syncTime()
-            SP.guid = ""
-            YSP.getGuid()
-        }
-
-        val application = requireActivity().applicationContext as MyTVApplication
-        val textSize = application.px2PxFont(binding.switchChannelReversal.textSize)
-
-        binding.content.layoutParams.width =
-            application.px2Px(binding.content.layoutParams.width)
-        binding.content.setPadding(
-            application.px2Px(binding.content.paddingLeft),
-            application.px2Px(binding.content.paddingTop),
-            application.px2Px(binding.content.paddingRight),
-            application.px2Px(binding.content.paddingBottom)
-        )
-        binding.name.textSize = application.px2PxFont(binding.name.textSize)
-        binding.version.textSize = textSize
-        val layoutParamsVersion = binding.version.layoutParams as ViewGroup.MarginLayoutParams
-        layoutParamsVersion.topMargin = application.px2Px(binding.version.marginTop)
-        binding.version.layoutParams = layoutParamsVersion
-
-        binding.checkVersion.textSize = textSize
-        val layoutParamsCheckVersion =
-            binding.checkVersion.layoutParams as ViewGroup.MarginLayoutParams
-        layoutParamsCheckVersion.marginEnd = application.px2Px(binding.checkVersion.marginEnd)
-        binding.checkVersion.layoutParams = layoutParamsCheckVersion
-
-        binding.versionName.textSize = textSize
-
-        binding.clear.textSize = textSize
-        binding.exit.textSize = textSize
-
-        val layoutParamsChannelSwitch =
-            binding.switchChannelReversal.layoutParams as ViewGroup.MarginLayoutParams
-        layoutParamsChannelSwitch.topMargin =
-            application.px2Px(binding.switchChannelReversal.marginTop)
-
-        binding.switchChannelReversal.textSize = textSize
-        binding.switchChannelReversal.layoutParams = layoutParamsChannelSwitch
-
-        binding.switchChannelNum.textSize = textSize
-        binding.switchChannelNum.layoutParams = layoutParamsChannelSwitch
-
-        binding.switchTime.textSize = textSize
-        binding.switchTime.layoutParams = layoutParamsChannelSwitch
-
-        binding.switchBootStartup.textSize = textSize
-        binding.switchBootStartup.layoutParams = layoutParamsChannelSwitch
-
-        binding.switchGrid.textSize = textSize
-        binding.switchGrid.layoutParams = layoutParamsChannelSwitch
-
-        binding.appreciate.layoutParams.width =
-            application.px2Px(binding.appreciate.layoutParams.width)
-
-        binding.exit.setOnClickListener {
-            requireActivity().finishAffinity()
-        }
-
-//        val myViewModel = application.myViewModel
-//        application.myViewModel.downloadProgress.observe(viewLifecycleOwner) { _ ->
-//            val downloadProgress = myViewModel.downloadProgress.value
-//            if (downloadProgress != null) {
-//                if (downloadProgress == 100) {
-//                    binding.progressBar.visibility = GONE
-//                } else {
-//                    if (!binding.progressBar.isVisible) {
-//                        binding.progressBar.visibility = VISIBLE
-//                    }
-//                    binding.progressBar.progress = downloadProgress
-//                }
-//            }
-//        }
-
-        updateManager = UpdateManager(context, context.appVersionCode)
-
-        return binding.root
+        return ui.root
     }
 
-    private fun requestInstallPermissions() {
-        val context = requireContext()
-        val permissionsList: MutableList<String> = ArrayList()
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
-            permissionsList.add(Manifest.permission.REQUEST_INSTALL_PACKAGES)
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.READ_EXTERNAL_STORAGE
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            permissionsList.add(Manifest.permission.READ_EXTERNAL_STORAGE)
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.WRITE_EXTERNAL_STORAGE
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            permissionsList.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-        }
-
-        if (permissionsList.isNotEmpty()) {
-            ActivityCompat.requestPermissions(
-                requireActivity(),
-                permissionsList.toTypedArray<String>(),
-                PERMISSIONS_REQUEST_CODE
-            )
-        } else {
-            updateManager.checkAndUpdate()
-        }
+    private fun bindSwitch(view: Switch, checked: Boolean, save: (Boolean) -> Unit) {
+        view.isChecked = checked
+        view.setOnCheckedChangeListener { _, value -> save(value) }
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == PERMISSIONS_REQUEST_CODE) {
-            var allPermissionsGranted = true
-            for (result in grantResults) {
-                if (result != PackageManager.PERMISSION_GRANTED) {
-                    allPermissionsGranted = false
-                    break
+    private fun showPage(showMore: Boolean, target: Int) {
+        val ui = binding ?: return
+        more = showMore
+        focusId = target
+        ui.preferences.isVisible = !more
+        ui.actions.isVisible = more
+        ui.title.setText(if (more) R.string.more_settings else R.string.settings_title)
+        ui.root.scrollTo(0, 0)
+        ui.root.findViewById<View>(target)?.requestFocus()
+    }
+
+    override fun onStart() {
+        val initialFocus = restoredFocus ?: focusId
+        super.onStart()
+        val ui = binding ?: return
+        val window = requireDialog().window ?: return
+        val metrics = resources.displayMetrics
+        val density = metrics.density
+        val width = (metrics.widthPixels * .25f).roundToInt()
+            .coerceAtLeast((248 * density).roundToInt()).coerceAtMost((metrics.widthPixels * .88f).toInt())
+        window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+        window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+        window.setBackgroundDrawableResource(R.drawable.tv_panel)
+        window.attributes = window.attributes.apply {
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            x = (metrics.widthPixels * .045f).roundToInt()
+        }
+        if (Build.VERSION.SDK_INT >= 31 && window.windowManager.isCrossWindowBlurEnabled) {
+            window.setBackgroundBlurRadius((15 * density).roundToInt())
+        }
+        window.setLayout(width, WindowManager.LayoutParams.WRAP_CONTENT)
+        requireDialog().setOnKeyListener { _, key, event ->
+            when (key) {
+                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE, KeyEvent.KEYCODE_MENU -> {
+                    if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) {
+                        if (more) showPage(false, R.id.more) else dismiss()
+                    }
+                    true
                 }
-            }
-            if (allPermissionsGranted) {
-                updateManager.checkAndUpdate()
-            } else {
-                Toast.makeText(context, "权限授权失败", Toast.LENGTH_LONG).show()
+                else -> false
             }
         }
+        val target = ui.root.findViewById<View>(initialFocus)
+        if (target?.requestFocus() == false) target.requestFocusFromTouch()
+        if (restoredFocus != null) {
+            ui.root.doOnPreDraw { target?.requestFocus() }
+            restoredFocus = null
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("more", more)
+        outState.putInt("focus", focusId)
+        super.onSaveInstanceState(outState)
+    }
+
+    private fun checkUpdate(ui: SettingBinding) {
+        if (checkingUpdate) return
+        checkingUpdate = true
+        ui.checkVersion.setText(R.string.checking)
+        viewLifecycleOwner.lifecycleScope.launch {
+            val release = try {
+                ReleaseRequest().getRelease()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                null
+            } finally {
+                checkingUpdate = false
+                ui.checkVersion.setText(R.string.check_version)
+            }
+            if (childFragmentManager.isStateSaved || !more || !isResumed) return@launch
+            val preview = resources.getBoolean(R.bool.preview_build)
+            val newVersion = release?.version_name?.takeIf {
+                !preview &&
+                (release.version_code ?: 0) > requireContext().appVersionCode
+            }
+            val message = when {
+                preview && release?.version_name != null -> getString(R.string.preview_upstream_version, release.version_name)
+                newVersion != null -> getString(R.string.new_version, newVersion)
+                release?.version_code != null -> getString(R.string.up_to_date)
+                else -> getString(R.string.update_unavailable)
+            }
+            ConfirmationFragment.update(message, newVersion).show(childFragmentManager, "confirm")
+        }
+    }
+
+    private var checkingUpdate = false
+
+    internal fun confirmAction(reset: Boolean, version: String?) {
+        if (version != null) UpdateManager.startDownload(requireContext(), version)
+        else if (reset) resetSettings()
+    }
+
+    private fun resetSettings() {
+        SP.resetSettings()
+        (requireActivity() as MainActivity).syncTime()
+        YSP.getGuid()
+        binding?.apply {
+            switchChannelReversal.isChecked = SP.channelReversal
+            switchChannelNum.isChecked = SP.channelNum
+            switchTime.isChecked = SP.time
+            switchGrid.isChecked = SP.grid
+            switchBootStartup.isChecked = SP.bootStartup
+        }
+        Toast.makeText(requireContext(), R.string.reset_done, Toast.LENGTH_SHORT).show()
     }
 
     override fun onDestroyView() {
+        binding = null
         super.onDestroyView()
-        _binding = null
     }
 
-    companion object {
-        const val TAG = "SettingFragment"
-        const val PERMISSIONS_REQUEST_CODE = 1
-    }
+    companion object { const val TAG = "SettingFragment" }
 }
-

@@ -1,112 +1,63 @@
 package com.lizongying.mytv
 
-import android.content.res.Resources
 import android.os.Bundle
-import android.os.Handler
-import android.view.LayoutInflater
 import android.view.View
-import android.view.ViewGroup
-import androidx.core.view.marginEnd
-import androidx.core.view.marginTop
+import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
 import com.lizongying.mytv.databinding.ChannelBinding
 import com.lizongying.mytv.models.TVViewModel
 
-class ChannelFragment : Fragment() {
-    private var _binding: ChannelBinding? = null
-    private val binding get() = _binding!!
-
-    private val handler = Handler()
-    private val delay: Long = 5000
-    private var channel = 0
-    private var channelCount = 0
-
-    override fun onCreateView(
-        inflater: LayoutInflater, container: ViewGroup?,
-        savedInstanceState: Bundle?
-    ): View {
-        _binding = ChannelBinding.inflate(inflater, container, false)
-        _binding!!.root.visibility = View.GONE
-
-        val application = requireActivity().applicationContext as MyTVApplication
-
-        binding.channel.layoutParams.width = application.px2Px(binding.channel.layoutParams.width)
-        binding.channel.layoutParams.height = application.px2Px(binding.channel.layoutParams.height)
-
-        val layoutParams = binding.channel.layoutParams as ViewGroup.MarginLayoutParams
-        layoutParams.topMargin = application.px2Px(binding.channel.marginTop)
-        layoutParams.marginEnd = application.px2Px(binding.channel.marginEnd)
-        binding.channel.layoutParams = layoutParams
-
-        binding.content.textSize = application.px2PxFont(binding.content.textSize)
-        binding.time.textSize = application.px2PxFont(binding.time.textSize)
-
-        binding.main.layoutParams.width = application.shouldWidthPx()
-        binding.main.layoutParams.height = application.shouldHeightPx()
-
-        (activity as MainActivity).fragmentReady(TAG)
-        return binding.root
+class ChannelFragment : Fragment(R.layout.channel) {
+    private var binding: ChannelBinding? = null
+    private var digits = ""
+    private val hide = Runnable { clear() }
+    private val tune = Runnable {
+        val number = digits.toIntOrNull()
+        clear()
+        if (number != null) (activity as? MainActivity)?.play(number - 1)
     }
 
-    fun show(tvViewModel: TVViewModel) {
-        handler.removeCallbacks(hideRunnable)
-        handler.removeCallbacks(playRunnable)
-        binding.content.text = (tvViewModel.getTV().id.plus(1)).toString()
-        view?.visibility = View.VISIBLE
-        handler.postDelayed(hideRunnable, delay)
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        binding = ChannelBinding.bind(view)
+        view.isVisible = false
+        (requireActivity() as MainActivity).fragmentReady("ChannelFragment")
     }
 
-    fun show(channel: String) {
-        if (channelCount > 1) {
-            return
-        }
-        channelCount++
-        this.channel = "${this.channel}$channel".toInt()
-        handler.removeCallbacks(hideRunnable)
-        handler.removeCallbacks(playRunnable)
-        if (channelCount < 2) {
-            binding.content.text = "${this.channel}"
-            view?.visibility = View.VISIBLE
-            handler.postDelayed(playRunnable, delay)
-        } else {
-            handler.postDelayed(playRunnable, 0)
-        }
+    fun show(model: TVViewModel) {
+        val ui = binding ?: return
+        clear()
+        ui.content.text = (model.getTV().id + 1).toString()
+        ui.root.isVisible = true
+        ui.root.postDelayed(hide, 5_000)
     }
 
-    override fun onResume() {
-        super.onResume()
-        if (view?.visibility == View.VISIBLE) {
-            handler.postDelayed(hideRunnable, delay)
+    fun show(digit: String) {
+        val ui = binding ?: return
+        ui.root.removeCallbacks(hide)
+        ui.root.removeCallbacks(tune)
+        digits += digit
+        ui.content.text = digits
+        ui.root.isVisible = true
+        if (digits.length == 2) tune.run() else ui.root.postDelayed(tune, 5_000)
+    }
+
+    fun clear() {
+        digits = ""
+        binding?.root?.apply {
+            removeCallbacks(hide)
+            removeCallbacks(tune)
+            isVisible = false
         }
     }
 
     override fun onPause() {
+        clear()
         super.onPause()
-        handler.removeCallbacks(hideRunnable)
-        handler.removeCallbacks(playRunnable)
-    }
-
-    private val hideRunnable = Runnable {
-        binding.content.text = ""
-        view?.visibility = View.GONE
-        channel = 0
-        channelCount = 0
-    }
-
-    private val playRunnable = Runnable {
-        (activity as MainActivity).play(channel - 1)
-        binding.content.text = ""
-        view?.visibility = View.GONE
-        channel = 0
-        channelCount = 0
     }
 
     override fun onDestroyView() {
+        clear()
+        binding = null
         super.onDestroyView()
-        _binding = null
-    }
-
-    companion object {
-        private const val TAG = "ChannelFragment"
     }
 }

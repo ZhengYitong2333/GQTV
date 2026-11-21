@@ -1,60 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout  xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:id="@+id/card"
-    android:layout_width="150dp"
-    android:layout_height="100dp"
-    android:orientation="vertical"
-    android:layout_gravity="center_vertical"
-    >
-    <ImageView
-        android:id="@+id/icon"
-        android:layout_width="match_parent"
-        android:layout_height="40dp"
-        android:background="@drawable/rounded_white_top"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
-        android:padding="5dp" />
-
-    <LinearLayout
-        android:id="@+id/main"
-        android:layout_width="match_parent"
-        android:layout_height="60dp"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/icon"
-        android:background="@drawable/rounded_dark_bottom"
-        android:orientation="vertical"
-        android:padding="7dp">
-
-        <TextView
-            android:id="@+id/title"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintTop_toTopOf="parent"
-            android:gravity="start"
-            android:text="Title"
-            android:maxLines="1"
-            android:ellipsize="end"
-            android:textColor="#FFEEEEEE"
-            android:textSize="14sp" />
-
-        <TextView
-            android:id="@+id/desc"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintTop_toBottomOf="@id/title"
-            android:layout_marginTop="8dp"
-            android:gravity="start"
-            android:maxLines="1"
-            android:ellipsize="end"
-            android:text="Description"
-            android:textColor="#B3EEEEEE"
-            android:textSize="12sp" />
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="160dp" android:layout_height="68dp" android:orientation="vertical" android:gravity="center_vertical"
+    android:background="@drawable/tv_focus" android:paddingStart="12dp" android:paddingEnd="12dp"
+    android:focusable="true" android:clickable="true">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:duplicateParentState="true" android:gravity="center_vertical">
+        <TextView android:id="@+id/title" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:duplicateParentState="true" android:textColor="@color/tv_focus_text" android:textSize="17sp" android:textStyle="bold"
+            android:ellipsize="end" android:maxLines="1" />
+        <TextView android:id="@+id/category" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginStart="5dp" android:duplicateParentState="true" android:textColor="@color/tv_focus_text"
+            android:textSize="11sp" android:ellipsize="end" android:maxLines="1" />
     </LinearLayout>
-</androidx.constraintlayout.widget.ConstraintLayout>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:duplicateParentState="true" android:gravity="center_vertical">
+        <TextView android:id="@+id/desc" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+            android:duplicateParentState="true" android:textColor="@color/tv_focus_text" android:textSize="13sp" android:maxLines="1" android:ellipsize="end" />
+        <ImageView android:id="@+id/playing" android:layout_width="14dp" android:layout_height="12dp"
+            android:src="@drawable/tv_playing" android:contentDescription="@string/current_channel" />
+    </LinearLayout>
+</LinearLayout>

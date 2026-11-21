@@ -1,457 +1,235 @@
 package com.lizongying.mytv
 
 import android.os.Bundle
-import android.util.Log
-import android.view.GestureDetector
-import android.view.KeyEvent
-import android.view.LayoutInflater
-import android.view.MotionEvent
+import android.os.SystemClock
 import android.view.View
-import android.view.ViewGroup
 import android.widget.Toast
-import androidx.core.view.marginBottom
-import androidx.core.view.marginStart
-import androidx.core.view.marginTop
+import androidx.core.view.doOnNextLayout
+import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
-import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.lizongying.mytv.api.YSP
 import com.lizongying.mytv.databinding.MenuBinding
-import com.lizongying.mytv.databinding.RowBinding
 import com.lizongying.mytv.models.ProgramType
 import com.lizongying.mytv.models.TVList
-import com.lizongying.mytv.models.TVListViewModel
 import com.lizongying.mytv.models.TVViewModel
+import com.lizongying.mytv.models.currentProgramIndex
 import com.lizongying.mytv.requests.Request
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
+class MainFragment : Fragment(R.layout.menu) {
+    private var binding: MenuBinding? = null
+    private val host get() = requireActivity() as MainActivity
+    private val channels = TVList.list.values.flatten().map(::TVViewModel)
+    private var current = 0
+    internal val currentChannel: TVViewModel? get() = channels.getOrNull(current)
+    private var grid: Boolean? = null
+    private var cards: CardAdapter? = null
+    private val guideRequests = mutableMapOf<Int, Long>()
+    private val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
 
-class MainFragment : Fragment(), CardAdapter.ItemListener {
-
-    private var itemPosition = 0
-
-    private var rowList: MutableList<View> = mutableListOf()
-
-    private var _binding: MenuBinding? = null
-    private val binding get() = _binding!!
-
-    var tvListViewModel = TVListViewModel()
-
-    private var lastVideoUrl = ""
-
-    private lateinit var application: MyTVApplication
-
-    private lateinit var gestureDetector: GestureDetector
-
-    override fun onCreateView(
-        inflater: LayoutInflater, container: ViewGroup?,
-        savedInstanceState: Bundle?
-    ): View {
-        val context = requireContext()
-        _binding = MenuBinding.inflate(inflater, container, false)
-
-        application = requireActivity().applicationContext as MyTVApplication
-
-        binding.menu.layoutParams.width = application.shouldWidthPx()
-        binding.menu.layoutParams.height = application.shouldHeightPx()
-
-        binding.container.setOnClickListener {
-            hideSelf()
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        val ui = MenuBinding.bind(view)
+        binding = ui
+        YSP.init(requireContext())
+        current = SP.itemPosition.takeIf { it in channels.indices } ?: 0
+        ui.root.setOnClickListener { host.closeBrowser() }
+        ui.items.setHasFixedSize(true)
+        ui.items.itemAnimator = null
+        ui.items.addOnLayoutChangeListener { list, left, _, right, _, oldLeft, _, oldRight, _ ->
+            if (right - left != oldRight - oldLeft) resizeCards(list.width)
         }
-
-        gestureDetector = GestureDetector(context, GestureListener())
-
-        return binding.root
+        channels.forEachIndexed { index, channel ->
+            channel.change.observe(viewLifecycleOwner) { reason ->
+                if (index == current) {
+                    Request.stopPlaybackRequests()
+                    host.selectChannel(channel, reason != "retry")
+                    if (reason != "retry") channel.setErrInfo("")
+                    if (channel.getTV().pid.isNotEmpty()) {
+                        Request.fetchData(channel)
+                    } else {
+                        playIfReady(channel)
+                    }
+                    host.showInfoFragment(channel)
+                }
+            }
+            channel.ready.observe(viewLifecycleOwner) { if (index == current) playIfReady(channel) }
+            channel.errInfo.observe(viewLifecycleOwner) { message ->
+                if (index == current) host.setPlaybackError(message.orEmpty())
+            }
+            channel.epg.observe(viewLifecycleOwner) {
+                if (index == current && !isHidden) renderProgram()
+                val holder = ui.items.findViewHolderForAdapterPosition(index) as? CardAdapter.Holder
+                holder?.render(index)
+            }
+        }
+        host.fragmentReady(TAG)
     }
 
-    private inner class GestureListener : GestureDetector.SimpleOnGestureListener() {
-        override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-            Log.i(TAG, "onSingleTapConfirmed")
-            hideSelf()
-            return true
+    private fun playIfReady(channel: TVViewModel) {
+        val index = channel.videoIndex.value ?: -1
+        if (!channel.videoUrl.value?.getOrNull(index).isNullOrBlank()) {
+            host.play(channel)
+        } else if (channel.getTV().pid.isEmpty()) {
+            channel.setErrInfo(getString(R.string.source_unavailable))
         }
     }
 
-    private fun hideSelf() {
-        requireActivity().supportFragmentManager.beginTransaction()
-            .hide(this)
-            .commit()
+    fun fragmentReady() {
+        currentChannel?.let {
+            requestGuide(current)
+            it.changed("init")
+        }
     }
 
-    override fun onActivityCreated(savedInstanceState: Bundle?) {
-        super.onActivityCreated(savedInstanceState)
+    fun play(position: Int) {
+        if (position !in channels.indices) {
+            Toast.makeText(requireContext(), R.string.channel_missing, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val previous = current
+        current = position
+        SP.itemPosition = position
+        cards?.currentPosition = current
+        if (previous != current) {
+            cards?.notifyItemChanged(previous)
+            cards?.notifyItemChanged(current)
+        }
+        requestGuide(current)
+        channels[current].changed("tune")
+    }
 
-        activity?.let { YSP.init(it) }
+    fun step(delta: Int) {
+        if (channels.isNotEmpty()) play((current + delta + channels.size) % channels.size)
+    }
 
-        itemPosition = SP.itemPosition
+    private fun select(position: Int) {
+        if (current != position || !currentChannel?.errInfo?.value.isNullOrEmpty()) play(position)
+        host.closeBrowser()
+    }
 
-        view?.post {
-            val content = binding.content
+    private fun requestGuide(position: Int) {
+        val channel = channels.getOrNull(position) ?: return
+        if (channel.getTV().pid.isEmpty()) return
+        val now = SystemClock.elapsedRealtime()
+        val last = guideRequests[position]
+        val hasUpcoming = (channel.epg.value?.lastOrNull()?.beginTime ?: 0) > Utils.getDateTimestamp()
+        val retryAfter = if (hasUpcoming) 60 * 60_000L else 60_000L
+        if (last != null && now - last < retryAfter) return
+        guideRequests[position] = now
+        when (channel.getTV().programType) {
+            ProgramType.Y_PROTO -> Request.fetchYProtoEPG(channel)
+            ProgramType.Y_JCE -> Request.fetchYJceEPG(channel)
+            ProgramType.F -> Request.fetchFEPG(channel)
+        }
+    }
 
-            var idx: Long = 0
-            for ((k, v) in TVList.list) {
-                val itemBinding: RowBinding =
-                    RowBinding.inflate(layoutInflater, content, false)
+    private fun renderProgram() {
+        val ui = binding ?: return
+        val channel = currentChannel ?: return
+        val guide = channel.epg.value.orEmpty()
+        val index = guide.currentProgramIndex(Utils.getDateTimestamp())
+        val program = guide.getOrNull(index)
+        val next = guide.getOrNull(index + 1)
+        fun time(seconds: Int) = timeFormat.format(Date(seconds * 1000L))
 
-                val tvListViewModelCurrent = TVListViewModel()
-                for ((idx2, v1) in v.withIndex()) {
-                    val tvViewModel = TVViewModel(v1)
-                    tvViewModel.setRowPosition(idx.toInt())
-                    tvViewModel.setItemPosition(idx2)
-                    tvListViewModelCurrent.addTVViewModel(tvViewModel)
-                    tvListViewModel.addTVViewModel(tvViewModel)
-                }
-                tvListViewModel.maxNum.add(v.size)
+        ui.station.text = channel.getTV().displayTitle()
+        ui.program.text = program?.title ?: channel.getTV().displayTitle()
+        ui.schedule.text = when {
+            program == null -> getString(R.string.live_label)
+            next == null -> getString(R.string.live_label) + "　" + time(program.beginTime)
+            else -> getString(R.string.live_label) + "　" +
+                getString(R.string.program_time, time(program.beginTime), time(next.beginTime))
+        }
+        ui.upNext.isVisible = next != null
+        if (next != null) ui.upNext.text = getString(R.string.next_program, time(next.beginTime), next.title)
+    }
 
-                val adapter =
-                    CardAdapter(
-                        itemBinding.items,
-                        this,
-                        tvListViewModelCurrent,
-                    )
-                rowList.add(itemBinding.items)
-
-                adapter.setItemListener(this)
-
-                itemBinding.header.text = k
-                itemBinding.items.tag = idx.toInt()
-                itemBinding.items.adapter = adapter
-
-                itemBinding.items.addOnScrollListener(object : RecyclerView.OnScrollListener() {
-                    override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
-                        super.onScrolled(recyclerView, dx, dy)
-                        (activity as MainActivity).mainActive()
-                    }
-                })
-
-                val itemDecoration = context?.let { ItemDecoration(it) }
-                if (itemDecoration != null) {
-                    itemBinding.items.addItemDecoration(itemDecoration)
-                }
-
-                if (SP.grid) {
-                    itemBinding.items.layoutManager =
-                        GridLayoutManager(context, 6)
-                    itemBinding.items.layoutParams.height =
-                        application.dp2Px(110 * ((tvListViewModelCurrent.size() + 6 - 1) / 6) + 5)
-                } else {
-                    itemBinding.items.layoutManager =
-                        LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false)
-                }
-
-                val layoutParams = itemBinding.row.layoutParams as ViewGroup.MarginLayoutParams
-                layoutParams.topMargin = application.dp2Px(11)
-                itemBinding.row.layoutParams = layoutParams
-                itemBinding.row.setOnClickListener {
-                    hideSelf()
-                }
-
-                itemBinding.items.addOnItemTouchListener(object : RecyclerView.OnItemTouchListener {
-                    override fun onInterceptTouchEvent(rv: RecyclerView, e: MotionEvent): Boolean {
-                        gestureDetector.onTouchEvent(e)
-                        return false
-                    }
-
-                    override fun onTouchEvent(rv: RecyclerView, e: MotionEvent) {
-                        TODO("Not yet implemented")
-                    }
-
-                    override fun onRequestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
-                        TODO("Not yet implemented")
-                    }
-                })
-
-                val layoutParamsHeader =
-                    itemBinding.header.layoutParams as ViewGroup.MarginLayoutParams
-                layoutParamsHeader.topMargin = application.px2Px(itemBinding.header.marginTop)
-                layoutParamsHeader.bottomMargin = application.px2Px(itemBinding.header.marginBottom)
-                layoutParamsHeader.marginStart = application.px2Px(itemBinding.header.marginStart)
-                itemBinding.header.layoutParams = layoutParamsHeader
-                itemBinding.header.textSize = application.px2PxFont(itemBinding.header.textSize)
-
-                content.addView(itemBinding.row)
-
-                idx++
-            }
-
-            if (itemPosition >= tvListViewModel.size()) {
-                itemPosition = 0
-            }
-
-            tvListViewModel.setItemPosition(itemPosition)
-            tvListViewModel.tvListViewModel.value?.forEach { tvViewModel ->
-                tvViewModel.errInfo.observe(viewLifecycleOwner) { _ ->
-                    if (tvViewModel.errInfo.value != null
-                        && tvViewModel.getTV().id == itemPosition
-                    ) {
-                        if (tvViewModel.errInfo.value == "") {
-                            (activity as? MainActivity)?.showPlayerFragment()
-                            (activity as? MainActivity)?.hideErrorFragment()
-                            (activity as? MainActivity)?.hideLoadingFragment()
-                        } else {
-                            (activity as? MainActivity)?.hidePlayerFragment()
-                            (activity as? MainActivity)?.hideLoadingFragment()
-                            (activity as? MainActivity)?.showErrorFragment(tvViewModel.errInfo.value.toString())
-                        }
-                    }
-                }
-                tvViewModel.ready.observe(viewLifecycleOwner) { _ ->
-
-                    // not first time && channel not change
-                    if (tvViewModel.ready.value != null
-                        && tvViewModel.getTV().id == itemPosition
-                        && check(tvViewModel)
-                    ) {
-                        Log.i(TAG, "ready ${tvViewModel.getTV().title}")
-                        (activity as? MainActivity)?.play(tvViewModel)
-                    }
-                }
-                tvViewModel.change.observe(viewLifecycleOwner) { _ ->
-                    if (tvViewModel.change.value != null) {
-                        val title = tvViewModel.getTV().title
-                        Log.i(TAG, "switch $title")
-                        if (tvViewModel.getTV().pid != "") {
-                            Log.i(TAG, "request $title")
-                            lifecycleScope.launch(Dispatchers.IO) {
-                                tvViewModel.let { Request.fetchData(it) }
-                            }
-                            (activity as? MainActivity)?.showInfoFragment(tvViewModel)
-                            setPosition(
-                                tvViewModel.getRowPosition(), tvViewModel.getItemPosition()
-                            )
-                        } else {
-                            if (check(tvViewModel)) {
-                                // TODO lastVideoUrl
-                                (activity as? MainActivity)?.play(tvViewModel)
-                                (activity as? MainActivity)?.showInfoFragment(tvViewModel)
-                                setPosition(
-                                    tvViewModel.getRowPosition(), tvViewModel.getItemPosition()
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-            (activity as MainActivity).fragmentReady(TAG)
+    private fun resizeCards(width: Int) {
+        val ui = binding ?: return
+        val adapter = cards ?: return
+        val available = width - ui.items.paddingLeft - ui.items.paddingRight
+        if (available <= 0) return
+        val minWidth = (142 * resources.displayMetrics.density).toInt()
+        val columns = (available / minWidth).coerceIn(2, 5)
+        val cellWidth = available / columns
+        if (adapter.cellWidth == cellWidth) return
+        adapter.cellWidth = cellWidth
+        (ui.items.layoutManager as? GridLayoutManager)?.spanCount = columns
+        for (i in 0 until ui.items.childCount) {
+            val child = ui.items.getChildAt(i)
+            child.layoutParams = child.layoutParams.apply { this.width = cellWidth }
         }
     }
 
     fun changeMenu() {
-        if (SP.grid) {
-            for (i in rowList) {
-                if (i is RecyclerView) {
-                    i.layoutManager = GridLayoutManager(context, 6)
-                    i.layoutParams.height =
-                        application.dp2Px(110 * (((i.adapter as CardAdapter).getItemCount() + 6 - 1) / 6) + 5)
-                }
-            }
+        val ui = binding ?: return
+        if (isHidden || (grid == SP.grid && cards != null)) return
+        val adapter = cards ?: CardAdapter(channels, ::select, { host.mainActive() }, { index ->
+            if (!isHidden) requestGuide(index)
+        }).also { cards = it }
+        adapter.currentPosition = current
+        grid = SP.grid
+        ui.items.layoutManager = if (SP.grid) GridLayoutManager(requireContext(), 5)
+            else LinearLayoutManager(requireContext(), RecyclerView.HORIZONTAL, false)
+        val heightDp = if (SP.grid) 146 else 78
+        ui.items.layoutParams = ui.items.layoutParams.apply {
+            height = (resources.displayMetrics.density * heightDp).toInt()
+        }
+        adapter.cellWidth = 0
+        resizeCards(ui.items.width)
+        if (ui.items.adapter !== adapter) ui.items.adapter = adapter
+        ui.keys.direction.setText(if (SP.grid) R.string.key_grid else R.string.key_horizontal)
+    }
+
+    fun focusCurrent() {
+        val ui = binding ?: return
+        val list = ui.items
+        changeMenu()
+        renderProgram()
+        requestGuide(current)
+        val layout = list.layoutManager as LinearLayoutManager
+        if (layout.orientation == RecyclerView.HORIZONTAL) {
+            val panel = list.parent as View
+            val width = list.width.takeIf { it > 0 } ?: (ui.root.rootView.width - panel.paddingLeft - panel.paddingRight)
+            resizeCards(width)
+            val space = width - list.paddingLeft - list.paddingRight - (cards?.cellWidth ?: 0)
+            layout.scrollToPositionWithOffset(current, (space / 2).coerceAtLeast(0))
         } else {
-            for (i in rowList) {
-                if (i is RecyclerView) {
-                    i.layoutManager =
-                        LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false)
-                    i.layoutParams.height = application.dp2Px(110 + 5)
+            layout.scrollToPosition(current)
+        }
+        fun focusCard() {
+            if (binding !== ui || isHidden) return
+            list.findViewHolderForAdapterPosition(current)?.itemView?.requestFocus()
+            for (i in 0 until list.childCount) {
+                val holder = list.getChildViewHolder(list.getChildAt(i)) as CardAdapter.Holder
+                val position = holder.bindingAdapterPosition
+                if (position != RecyclerView.NO_POSITION) {
+                    holder.render(position)
+                    requestGuide(position)
                 }
             }
         }
-    }
-
-    override fun onKey(keyCode: Int): Boolean {
-        if (this.isHidden) {
-            when (keyCode) {
-                KeyEvent.KEYCODE_DPAD_UP -> {
-                    (activity as MainActivity).onKey(keyCode)
-                    return true
-                }
-
-                KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    (activity as MainActivity).onKey(keyCode)
-                    return true
-                }
-            }
-        }
-        return false
-    }
-
-    override fun onItemHasFocus(tvViewModel: TVViewModel) {
-        val row = tvViewModel.getRowPosition()
-
-        for (i in rowList) {
-            if (i.tag as Int != row) {
-                ((i as RecyclerView).adapter as CardAdapter).focusable = false
-                (i.adapter as CardAdapter).clear()
-            } else {
-                ((i as RecyclerView).adapter as CardAdapter).focusable = true
-            }
-        }
-
-        (activity as MainActivity).mainActive()
-    }
-
-    override fun onItemClicked(tvViewModel: TVViewModel) {
-        if (this.isHidden) {
-            (activity as? MainActivity)?.switchMainFragment()
-            return
-        }
-
-        if (itemPosition != tvViewModel.getTV().id) {
-            itemPosition = tvViewModel.getTV().id
-            tvListViewModel.setItemPosition(itemPosition)
-            tvListViewModel.getTVViewModel(itemPosition)?.changed("menu")
-            Log.i(TAG, "onItemClicked ${tvViewModel.getTV().id}")
-        }
-        (activity as? MainActivity)?.switchMainFragment()
-    }
-
-    fun setPosition() {
-        val tvViewModel = tvListViewModel.getTVViewModel(itemPosition) ?: return
-        val rowPosition = tvViewModel.getRowPosition()
-        val itemPosition = tvViewModel.getItemPosition()
-        setPosition(rowPosition, itemPosition)
-    }
-
-    fun setPosition(rowPosition: Int, itemPosition: Int) {
-        rowList[rowPosition].post {
-            when (val layoutManager = (rowList[rowPosition] as RecyclerView).layoutManager) {
-                is GridLayoutManager -> {
-                    layoutManager.findViewByPosition(
-                        itemPosition
-                    )?.requestFocus()
-                }
-
-                is LinearLayoutManager -> {
-                    layoutManager.findViewByPosition(
-                        itemPosition
-                    )?.requestFocus()
-                }
-            }
-        }
-    }
-
-    fun check(tvViewModel: TVViewModel): Boolean {
-        val title = tvViewModel.getTV().title
-        val videoUrl = tvViewModel.videoIndex.value?.let { tvViewModel.videoUrl.value?.get(it) }
-        if (videoUrl == null || videoUrl == "") {
-            Log.e(TAG, "$title videoUrl is empty")
-            return false
-        }
-
-        if (videoUrl == lastVideoUrl) {
-            Log.e(TAG, "$title videoUrl is duplication")
-            return false
-        }
-
-        return true
-    }
-
-    fun fragmentReady() {
-        tvListViewModel.getTVViewModel(itemPosition)?.changed("init")
-
-        tvListViewModel.tvListViewModel.value?.forEach { tvViewModel ->
-            updateEPG(tvViewModel)
-        }
-    }
-
-    fun play(itemPosition: Int) {
-        view?.post {
-            if (itemPosition > -1 && itemPosition < tvListViewModel.size()) {
-                this.itemPosition = itemPosition
-                tvListViewModel.setItemPosition(itemPosition)
-                tvListViewModel.getTVViewModel(itemPosition)?.changed("num")
-            } else {
-                Toast.makeText(context, "频道不存在", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    fun prev() {
-        view?.post {
-            itemPosition--
-            if (itemPosition == -1) {
-                itemPosition = tvListViewModel.size() - 1
-            }
-            tvListViewModel.setItemPosition(itemPosition)
-            tvListViewModel.getTVViewModel(itemPosition)?.changed("prev")
-        }
-    }
-
-    fun next() {
-        view?.post {
-            itemPosition++
-            if (itemPosition == tvListViewModel.size()) {
-                itemPosition = 0
-            }
-            tvListViewModel.setItemPosition(itemPosition)
-            tvListViewModel.getTVViewModel(itemPosition)?.changed("next")
-        }
-    }
-
-    private fun updateEPG(tvViewModel: TVViewModel) {
-        when (tvViewModel.getTV().programType) {
-            ProgramType.Y_PROTO -> {
-                Request.fetchYProtoEPG(tvViewModel)
-            }
-
-            ProgramType.Y_JCE -> {
-                Request.fetchYJceEPG(tvViewModel)
-            }
-
-            ProgramType.F -> {
-                Request.fetchFEPG(tvViewModel)
-            }
-        }
-    }
-
-    fun shouldHasFocus(tvModel: TVViewModel): Boolean {
-        return tvModel == tvListViewModel.getTVViewModel(itemPosition)
+        if (list.isLayoutRequested) list.doOnNextLayout { focusCard() } else focusCard()
     }
 
     override fun onHiddenChanged(hidden: Boolean) {
-        Log.i(TAG, "onHiddenChanged $hidden")
         super.onHiddenChanged(hidden)
-        if (!hidden) {
-            val tvModel = tvListViewModel.getTVViewModel(itemPosition)
-            val rowPosition = tvModel?.getRowPosition()
-            val itemPosition = tvModel?.getItemPosition()
-            Log.i(TAG, "toPosition $rowPosition $itemPosition")
-            for (i in rowList) {
-                if (i.tag as Int == rowPosition) {
-                    ((i as RecyclerView).adapter as CardAdapter).updateEPG()
-                    (i.adapter as CardAdapter).focusable = true
-                    (i.adapter as CardAdapter).toPosition(itemPosition!!)
-                    break
-                }
-            }
-        } else {
-            view?.post {
-                for (i in rowList) {
-                    ((i as RecyclerView).adapter as CardAdapter).focusable = false
-                }
-            }
-        }
-    }
-
-    override fun onResume() {
-        Log.i(TAG, "onResume")
-        super.onResume()
-    }
-
-    override fun onDestroy() {
-        Log.i(TAG, "onDestroy")
-        super.onDestroy()
+        if (!hidden) focusCurrent()
     }
 
     override fun onDestroyView() {
-        Log.i(TAG, "onDestroyView")
+        binding?.items?.adapter = null
+        binding = null
+        cards = null
+        grid = null
         super.onDestroyView()
-        _binding = null
     }
 
-    companion object {
-        private const val TAG = "MainFragment"
-        private const val POSITION = "position"
-    }
+    companion object { const val TAG = "MainFragment" }
 }

@@ -4,633 +4,236 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
+import android.os.SystemClock
 import android.view.GestureDetector
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
-import android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
-import android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-import android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-import android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
 import android.view.WindowManager
 import android.widget.Toast
+import androidx.annotation.Keep
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.lifecycleScope
 import com.lizongying.mytv.models.TVViewModel
 import com.lizongying.mytv.requests.Request
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
-
 class MainActivity : FragmentActivity(), Request.RequestListener, OnSharedPreferenceChangeListener {
+    private lateinit var player: PlayerFragment
+    private lateinit var errors: ErrorFragment
+    private lateinit var clock: TimeFragment
+    private lateinit var info: InfoFragment
+    private lateinit var numbers: ChannelFragment
+    private lateinit var browser: MainFragment
+    private lateinit var gestures: GestureDetector
+    private val handler = Handler(Looper.getMainLooper())
+    private val ready = mutableSetOf<String>()
+    private var playbackStarted = false
+    private var resumed = false
+    private var lastBack = -2_000L
+    private val hideBrowser = Runnable { closeBrowser() }
 
-    private var ready = 0
-    private val playerFragment = PlayerFragment()
-    private val errorFragment = ErrorFragment()
-
-    private val loadingFragment = LoadingFragment()
-    private val mainFragment = MainFragment()
-    private val infoFragment = InfoFragment()
-    private val channelFragment = ChannelFragment()
-    private var timeFragment = TimeFragment()
-    private val settingFragment = SettingFragment()
-
-    private var doubleBackToExitPressedOnce = false
-
-    private lateinit var gestureDetector: GestureDetector
-
-    private val handler = Handler()
-    private val delayHideMain: Long = 10000
-    private val delayHideSetting: Long = 15000
-
-    init {
-        Utils.setRequestListener(this)
-    }
-
-    fun syncTime() {
-        lifecycleScope.launch(Dispatchers.IO) {
-            val utilsJob = async(start = CoroutineStart.LAZY) { Utils.init() }
-            utilsJob.start()
-        }
-    }
+    private inline fun <reified T : Fragment> restoredOr(create: () -> T): T =
+        supportFragmentManager.fragments.filterIsInstance<T>().firstOrNull() ?: create()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val lp = window.attributes
-            lp.layoutInDisplayCutoutMode =
-                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-            window.setAttributes(lp)
+        window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        if (Build.VERSION.SDK_INT >= 28) window.attributes = window.attributes.apply {
+            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
-
-
-        window.decorView.apply {
-            systemUiVisibility =
-                SYSTEM_UI_FLAG_FULLSCREEN or
-                        SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                        View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-                        SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                        SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
-                        View.SYSTEM_UI_FLAG_IMMERSIVE
-        }
-
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
-        window.decorView.systemUiVisibility =
-            SYSTEM_UI_FLAG_FULLSCREEN or
-                    SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                    SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-//        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-//            window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
-//            window.statusBarColor = Color.TRANSPARENT
-//            window.navigationBarColor = Color.TRANSPARENT
-//        }
-
         setContentView(R.layout.activity_main)
-
+        Utils.setRequestListener(this)
         Request.setRequestListener(this)
-
-        if (savedInstanceState == null) {
-            val transaction = supportFragmentManager.beginTransaction()
-                .add(R.id.main_browse_fragment, playerFragment)
-                .add(R.id.main_browse_fragment, errorFragment)
-//                .add(R.id.main_browse_fragment, loadingFragment)
-                .add(R.id.main_browse_fragment, timeFragment)
-                .add(R.id.main_browse_fragment, infoFragment)
-                .add(R.id.main_browse_fragment, channelFragment)
-                .add(R.id.main_browse_fragment, mainFragment)
-                .hide(mainFragment)
-                .hide(errorFragment)
-
-            if (!SP.time) {
-                transaction.hide(timeFragment)
-            } else {
-                transaction.show(timeFragment)
+        player = restoredOr(::PlayerFragment)
+        errors = restoredOr(::ErrorFragment)
+        clock = restoredOr(::TimeFragment)
+        info = restoredOr(::InfoFragment)
+        numbers = restoredOr(::ChannelFragment)
+        browser = restoredOr(::MainFragment)
+        if (!browser.isAdded) {
+            val tx = supportFragmentManager.beginTransaction()
+            for (fragment in listOf(player, errors, clock, info, numbers, browser)) {
+                tx.add(R.id.main_browse_fragment, fragment, fragment.javaClass.simpleName)
             }
-
-            transaction.commitNow()
+            tx.hide(browser).hide(errors)
+            if (!SP.time) tx.hide(clock)
+            tx.commitNow()
         }
-        gestureDetector = GestureDetector(this, GestureListener())
-
-//        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-//            val connectivityManager =
-//                getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-//            connectivityManager.registerDefaultNetworkCallback(object :
-//                ConnectivityManager.NetworkCallback() {
-//                override fun onAvailable(network: Network) {
-//                    super.onAvailable(network)
-//                    Log.i(TAG, "net ${Build.VERSION.SDK_INT}")
-//                    if (this@MainActivity.isNetworkConnected) {
-//                        Log.i(TAG, "net isNetworkConnected")
-//                        ready++
-//                    }
-//                }
-//            })
-//        } else {
-//            Log.i(TAG, "net ${Build.VERSION.SDK_INT}")
-//            ready++
-//        }
-
+        gestures = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent) = true
+            override fun onSingleTapConfirmed(e: MotionEvent): Boolean { openBrowser(); return true }
+            override fun onDoubleTap(e: MotionEvent): Boolean { openSettings(); return true }
+            override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+                if (browser.isHidden && velocityY != 0f) browser.step(if (velocityY > 0) -1 else 1)
+                return true
+            }
+        })
         SP.setOnSharedPreferenceChangeListener(this)
     }
 
-    fun showInfoFragment(tvViewModel: TVViewModel) {
-        infoFragment.show(tvViewModel)
-        if (SP.channelNum) {
-            channelFragment.show(tvViewModel)
+    override fun onTouchEvent(event: MotionEvent): Boolean = gestures.onTouchEvent(event) || super.onTouchEvent(event)
+
+    fun syncTime() { lifecycleScope.launch(Dispatchers.IO) { Utils.init() } }
+
+    fun fragmentReady(tag: String) {
+        ready.add(tag)
+        startIfReady()
+    }
+
+    private fun startIfReady() {
+        if (resumed && !playbackStarted && ready.containsAll(requiredParts) &&
+            ("request" in ready || browser.currentChannel?.getTV()?.pid.isNullOrEmpty())) {
+            playbackStarted = true
+            browser.fragmentReady()
         }
     }
 
-    fun showErrorFragment(msg: String) {
-        errorFragment.show(msg)
-        if (errorFragment.isVisible) {
-            return
+    override fun onRequestFinished(message: String?) { fragmentReady("request") }
+
+    // Called by the upstream JNI library during player initialization.
+    @Keep
+    private fun getAppSignature() = appSignature
+
+    fun showInfoFragment(channel: TVViewModel) {
+        if (!browser.isHidden || supportFragmentManager.findFragmentByTag(SettingFragment.TAG) != null) return
+        info.show(channel)
+        if (SP.channelNum) numbers.show(channel)
+    }
+
+    fun setPlaybackError(message: String) {
+        if (supportFragmentManager.isStateSaved) return
+        errors.show(message)
+        val tx = supportFragmentManager.beginTransaction()
+        if (message.isEmpty()) tx.hide(errors).show(player) else tx.hide(player).show(errors)
+        tx.commit()
+    }
+
+    fun selectChannel(channel: TVViewModel, userTune: Boolean) = player.select(channel, userTune)
+    fun play(channel: TVViewModel) = player.play(channel)
+    fun play(position: Int) = browser.play(position)
+
+    private fun openBrowser() {
+        if (supportFragmentManager.isStateSaved || !browser.isHidden) return
+        info.hide()
+        numbers.clear()
+        supportFragmentManager.beginTransaction().show(browser).commitNow()
+        mainActive()
+    }
+
+    fun closeBrowser() {
+        handler.removeCallbacks(hideBrowser)
+        if (!supportFragmentManager.isStateSaved && !browser.isHidden) {
+            supportFragmentManager.beginTransaction().hide(browser).commit()
         }
-        supportFragmentManager.beginTransaction()
-            .show(errorFragment)
-            .commit()
-    }
-
-    fun hideErrorFragment() {
-        errorFragment.show("")
-        if (!errorFragment.isVisible) {
-            return
-        }
-        supportFragmentManager.beginTransaction()
-            .hide(errorFragment)
-            .commit()
-    }
-
-    fun showLoadingFragment() {
-        showFragment(loadingFragment)
-    }
-
-    fun hideLoadingFragment() {
-        hideFragment(loadingFragment)
-    }
-
-    fun showPlayerFragment() {
-        if (playerFragment.isVisible) {
-            return
-        }
-        supportFragmentManager.beginTransaction()
-            .show(playerFragment)
-            .commit()
-    }
-
-    fun hidePlayerFragment() {
-        if (!playerFragment.isVisible) {
-            return
-        }
-        supportFragmentManager.beginTransaction()
-            .hide(playerFragment)
-            .commit()
-    }
-
-    private fun showChannel(channel: String) {
-        if (!mainFragment.isHidden) {
-            return
-        }
-
-        if (settingFragment.isVisible) {
-            return
-        }
-
-        if (SP.channelNum) {
-            channelFragment.show(channel)
-        }
-    }
-
-    fun play(tvViewModel: TVViewModel) {
-        playerFragment.play(tvViewModel)
-    }
-
-    fun play(itemPosition: Int) {
-        mainFragment.play(itemPosition)
-    }
-
-    fun prev() {
-        mainFragment.prev()
-    }
-
-    fun next() {
-        mainFragment.next()
-    }
-
-    fun switchMainFragment() {
-        val transaction = supportFragmentManager.beginTransaction()
-
-        if (mainFragment.isHidden) {
-            mainFragment.setPosition()
-            transaction.show(mainFragment)
-            mainActive()
-        } else {
-            transaction.hide(mainFragment)
-        }
-
-        transaction.commit()
     }
 
     fun mainActive() {
-        handler.removeCallbacks(hideMain)
-        handler.postDelayed(hideMain, delayHideMain)
+        handler.removeCallbacks(hideBrowser)
+        if (resumed && !browser.isHidden) handler.postDelayed(hideBrowser, 10_000)
     }
 
-    fun settingDelayHide() {
-        handler.removeCallbacks(hideSetting)
-        handler.postDelayed(hideSetting, delayHideSetting)
+    private fun openSettings() {
+        val fm = supportFragmentManager
+        if (fm.isStateSaved || fm.findFragmentByTag(SettingFragment.TAG) != null) return
+        closeBrowser()
+        info.hide()
+        numbers.clear()
+        SettingFragment().showNow(fm, SettingFragment.TAG)
     }
 
-    fun settingNeverHide() {
-        handler.removeCallbacks(hideSetting)
+    private fun backFromPlayback() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastBack < 2_000) finish()
+        else Toast.makeText(this, R.string.press_back_again, Toast.LENGTH_SHORT).show()
+        lastBack = now
     }
 
-    private val hideMain = Runnable {
-        if (!mainFragment.isHidden) {
-            supportFragmentManager.beginTransaction().hide(mainFragment).commit()
-        }
+    override fun onBackPressed() {
+        if (browser.isHidden) backFromPlayback() else closeBrowser()
     }
 
-    private fun mainFragmentIsHidden(): Boolean {
-        return mainFragment.isHidden
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        if (::browser.isInitialized && !browser.isHidden) mainActive()
     }
 
-    private fun hideMainFragment() {
-        if (!mainFragment.isHidden) {
-            supportFragmentManager.beginTransaction()
-                .hide(mainFragment)
-                .commit()
-        }
-    }
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
+        handleRemote(event) || super.onKeyDown(keyCode, event)
 
-    fun fragmentReady(tag: String) {
-        ready++
-        Log.i(TAG, "ready $tag $ready ")
-        if (ready == 7) {
-            mainFragment.fragmentReady()
-        }
-    }
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean =
+        handleRemote(event) || super.onKeyUp(keyCode, event)
 
-    private fun showTime() {
-        if (SP.time) {
-            showFragment(timeFragment)
-        } else {
-            hideFragment(timeFragment)
-        }
-    }
-
-    private fun showFragment(fragment: Fragment) {
-        if (!fragment.isHidden) {
-            return
-        }
-
-        supportFragmentManager.beginTransaction()
-            .show(fragment)
-            .commitNow()
-    }
-
-    private fun hideFragment(fragment: Fragment) {
-        if (fragment.isHidden) {
-            return
-        }
-
-        supportFragmentManager.beginTransaction()
-            .hide(fragment)
-            .commitNow()
-    }
-
-    override fun onTouchEvent(event: MotionEvent?): Boolean {
-        if (event != null) {
-            gestureDetector.onTouchEvent(event)
-        }
-        return super.onTouchEvent(event)
-    }
-
-    private inner class GestureListener : GestureDetector.SimpleOnGestureListener() {
-
-        override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-            Log.i(TAG, "onSingleTapConfirmed")
-            switchMainFragment()
+    private fun handleRemote(event: KeyEvent): Boolean {
+        if (!::browser.isInitialized) return false
+        val code = event.keyCode
+        val onRelease = event.action == KeyEvent.ACTION_UP && !event.isCanceled
+        if (code == KeyEvent.KEYCODE_MENU || code == KeyEvent.KEYCODE_SETTINGS ||
+            code == KeyEvent.KEYCODE_HELP || code == KeyEvent.KEYCODE_BOOKMARK) {
+            if (onRelease) openSettings()
             return true
         }
-
-        override fun onDoubleTap(e: MotionEvent): Boolean {
-            showSetting()
+        if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_ESCAPE) {
+            if (onRelease) onBackPressed()
             return true
         }
+        if (!browser.isHidden) return false
+        when (code) {
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
+            KeyEvent.KEYCODE_DPAD_LEFT -> if (onRelease) openBrowser()
+            KeyEvent.KEYCODE_DPAD_RIGHT -> if (onRelease) openSettings()
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP ->
+                if (event.action == KeyEvent.ACTION_DOWN) browser.step(if (SP.channelReversal) 1 else -1)
+            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN ->
+                if (event.action == KeyEvent.ACTION_DOWN) browser.step(if (SP.channelReversal) -1 else 1)
+            in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 ->
+                if (onRelease && SP.channelNum) numbers.show((code - KeyEvent.KEYCODE_0).toString())
+            else -> return false
+        }
+        return true
+    }
 
-        override fun onFling(
-            e1: MotionEvent?,
-            e2: MotionEvent,
-            velocityX: Float,
-            velocityY: Float
-        ): Boolean {
-            if (velocityY > 0) {
-                if (mainFragment.isHidden) {
-                    prev()
-                } else {
-//                    if (mainFragment.selectedPosition == 0) {
-//                        mainFragment.setSelectedPosition(
-//                            mainFragment.tvListViewModel.maxNum.size - 1,
-//                            false
-//                        )
-//                    }
-                }
-            }
-            if (velocityY < 0) {
-                if (mainFragment.isHidden) {
-                    next()
-                } else {
-//                    if (mainFragment.selectedPosition == mainFragment.tvListViewModel.maxNum.size - 1) {
-////                        mainFragment.setSelectedPosition(0, false)
-//                        hideMainFragment()
-//                        return false
-//                    }
-                }
-            }
-            return super.onFling(e1, e2, velocityX, velocityY)
+    override fun onSharedPreferenceChanged(key: String) {
+        if (key == SP.KEY_GRID) browser.changeMenu()
+        if (key == SP.KEY_TIME && !supportFragmentManager.isStateSaved) {
+            val tx = supportFragmentManager.beginTransaction()
+            if (SP.time) tx.show(clock) else tx.hide(clock)
+            tx.commit()
         }
     }
 
-    private fun showSetting() {
-        if (!mainFragment.isHidden) {
-            return
-        }
-
-        if (settingFragment.isVisible) {
-            return
-        }
-
-        settingFragment.show(supportFragmentManager, TAG)
-        settingDelayHide()
-    }
-
-    private val hideSetting = Runnable {
-        if (settingFragment.isVisible) {
-            settingFragment.dismiss()
-        }
-    }
-
-    private fun hideSettingFragment() {
-        handler.postDelayed(hideSetting, 0)
-    }
-
-    private fun channelUp() {
-        if (mainFragment.isHidden) {
-            if (SP.channelReversal) {
-                next()
-                return
-            }
-            prev()
-        } else {
-//                    if (mainFragment.selectedPosition == 0) {
-//                        mainFragment.setSelectedPosition(
-//                            mainFragment.tvListViewModel.maxNum.size - 1,
-//                            false
-//                        )
-//                    }
-        }
-    }
-
-    private fun channelDown() {
-        if (mainFragment.isHidden) {
-            if (SP.channelReversal) {
-                prev()
-                return
-            }
-            next()
-        } else {
-//                    if (mainFragment.selectedPosition == mainFragment.tvListViewModel.maxNum.size - 1) {
-////                        mainFragment.setSelectedPosition(0, false)
-//                        hideMainFragment()
-//                        return false
-//                    }
-        }
-    }
-
-    private fun back() {
-        if (!mainFragmentIsHidden()) {
-            hideMainFragment()
-            return
-        }
-
-        if (settingFragment.isVisible) {
-            hideSettingFragment()
-            return
-        }
-
-        if (doubleBackToExitPressedOnce) {
-            super.onBackPressed()
-            return
-        }
-
-        doubleBackToExitPressedOnce = true
-        Toast.makeText(this, "再按一次退出", Toast.LENGTH_SHORT).show()
-
-        Handler(Looper.getMainLooper()).postDelayed({
-            doubleBackToExitPressedOnce = false
-        }, 2000)
-    }
-
-    private fun active() {
-        if (settingFragment.isVisible) {
-            settingDelayHide()
-        }
-    }
-
-    fun onKey(keyCode: Int): Boolean {
-        Log.i(TAG, "keyCode $keyCode")
-        when (keyCode) {
-            KeyEvent.KEYCODE_0 -> {
-                showChannel("0")
-                return true
-            }
-
-            KeyEvent.KEYCODE_1 -> {
-                showChannel("1")
-                return true
-            }
-
-            KeyEvent.KEYCODE_2 -> {
-                showChannel("2")
-                return true
-            }
-
-            KeyEvent.KEYCODE_3 -> {
-                showChannel("3")
-                return true
-            }
-
-            KeyEvent.KEYCODE_4 -> {
-                showChannel("4")
-                return true
-            }
-
-            KeyEvent.KEYCODE_5 -> {
-                showChannel("5")
-                return true
-            }
-
-            KeyEvent.KEYCODE_6 -> {
-                showChannel("6")
-                return true
-            }
-
-            KeyEvent.KEYCODE_7 -> {
-                showChannel("7")
-                return true
-            }
-
-            KeyEvent.KEYCODE_8 -> {
-                showChannel("8")
-                return true
-            }
-
-            KeyEvent.KEYCODE_9 -> {
-                showChannel("9")
-                return true
-            }
-
-            KeyEvent.KEYCODE_ESCAPE -> {
-                back()
-                return true
-            }
-
-            KeyEvent.KEYCODE_BACK -> {
-                back()
-                return true
-            }
-
-            KeyEvent.KEYCODE_BOOKMARK -> {
-                showSetting()
-                return true
-            }
-
-            KeyEvent.KEYCODE_UNKNOWN -> {
-//                showSetting()
-                return true
-            }
-
-            KeyEvent.KEYCODE_HELP -> {
-                showSetting()
-                return true
-            }
-
-            KeyEvent.KEYCODE_SETTINGS -> {
-                showSetting()
-                return true
-            }
-
-            KeyEvent.KEYCODE_MENU -> {
-                showSetting()
-                return true
-            }
-
-            KeyEvent.KEYCODE_ENTER -> {
-                active()
-                switchMainFragment()
-            }
-
-            KeyEvent.KEYCODE_DPAD_CENTER -> {
-                switchMainFragment()
-            }
-
-            KeyEvent.KEYCODE_DPAD_UP -> {
-                active()
-                channelUp()
-            }
-
-            KeyEvent.KEYCODE_CHANNEL_UP -> {
-                channelUp()
-            }
-
-            KeyEvent.KEYCODE_DPAD_DOWN -> {
-                active()
-                channelDown()
-            }
-
-            KeyEvent.KEYCODE_CHANNEL_DOWN -> {
-                channelDown()
-            }
-
-            KeyEvent.KEYCODE_DPAD_LEFT -> {
-                active()
-                if (mainFragment.isHidden && !settingFragment.isVisible) {
-                    switchMainFragment()
-                    return true
-                }
-            }
-
-            KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                active()
-                if (mainFragment.isHidden && !settingFragment.isVisible) {
-                    showSetting()
-                    return true
-                }
-            }
-        }
-        return false
-    }
-
-    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (onKey(keyCode)) {
-            return true
-        }
-
-        return super.onKeyDown(keyCode, event)
-    }
-
-    private fun getAppSignature() = this.appSignature
-
-    override fun onStart() {
-        Log.i(TAG, "onStart MainActivity")
-        syncTime()
-        super.onStart()
-    }
-
-    override fun onResume() {
-        Log.i(TAG, "onResume")
-        super.onResume()
-    }
+    override fun onStart() { super.onStart(); syncTime() }
 
     override fun onResumeFragments() {
         super.onResumeFragments()
-        mainFragment.changeMenu()
-
-        if (!mainFragment.isHidden) {
-            handler.postDelayed(hideMain, delayHideMain)
+        resumed = true
+        startIfReady()
+        if (!browser.isHidden && supportFragmentManager.findFragmentByTag(SettingFragment.TAG) == null) {
+            browser.focusCurrent()
+            mainActive()
         }
     }
 
     override fun onPause() {
-        Log.i(TAG, "onPause")
+        resumed = false
+        handler.removeCallbacks(hideBrowser)
         super.onPause()
-        handler.removeCallbacks(hideMain)
     }
 
     override fun onDestroy() {
+        handler.removeCallbacks(hideBrowser)
+        SP.clearListener(this)
+        Utils.clearListener(this)
+        Request.clearListener(this)
         super.onDestroy()
-        Request.onDestroy()
-    }
-
-    override fun onRequestFinished(message: String?) {
-        fragmentReady("request")
     }
 
     private companion object {
-        const val TAG = "MainActivity"
-    }
-
-    override fun onSharedPreferenceChanged(key: String) {
-        Log.i(TAG, "$key changed")
-        when (key) {
-            SP.KEY_GRID -> mainFragment.changeMenu()
-            SP.KEY_TIME -> showTime()
-        }
+        val requiredParts = setOf("PlayerFragment", "ErrorFragment", "TimeFragment", "InfoFragment",
+            "ChannelFragment", MainFragment.TAG)
     }
 }

@@ -11,9 +11,6 @@ import java.util.TimeZone
 
 class TVViewModel(private var tv: TV) : ViewModel() {
 
-    private var rowPosition: Int = 0
-    private var itemPosition: Int = 0
-
     var retryTimes = 0
     var retryMaxTimes = 8
     var authYSPRetryTimes = 0
@@ -82,22 +79,6 @@ class TVViewModel(private var tv: TV) : ViewModel() {
         _videoIndex.value = tv.videoUrl.lastIndex
     }
 
-    fun getRowPosition(): Int {
-        return rowPosition
-    }
-
-    fun getItemPosition(): Int {
-        return itemPosition
-    }
-
-    fun setRowPosition(position: Int) {
-        rowPosition = position
-    }
-
-    fun setItemPosition(position: Int) {
-        itemPosition = position
-    }
-
     fun setErrInfo(info: String) {
         _errInfo.value = info
     }
@@ -107,11 +88,11 @@ class TVViewModel(private var tv: TV) : ViewModel() {
     }
 
     fun addYJceEPG(p: MutableList<TVProgram>) {
-        _epg.value = p.map { EPG(it.name, it.start_time_stamp.toInt()) }.toMutableList()
+        setSchedule(p.map { EPG(it.name, it.start_time_stamp.toInt()) })
     }
 
     fun addYEPG(p: MutableList<Program>) {
-        _epg.value = p.map { EPG(it.name, it.st.toInt()) }.toMutableList()
+        setSchedule(p.map { EPG(it.name, it.st.toInt()) })
     }
 
     private fun formatFTime(s: String): Int {
@@ -125,14 +106,11 @@ class TVViewModel(private var tv: TV) : ViewModel() {
     }
 
     fun addFEPG(p: List<FEPG>) {
-        _epg.value = p.map { EPG(it.title, formatFTime(it.event_time)) }.toMutableList()
+        setSchedule(p.map { EPG(it.title, formatFTime(it.event_time)) })
     }
 
-    fun getVideoUrlCurrent(): String {
-        return _videoUrl.value!![_videoIndex.value!!]
+    private fun setSchedule(entries: List<EPG>) {
+        _epg.value = entries.sortedBy { it.beginTime }.toMutableList()
     }
 
-    companion object {
-        private const val TAG = "TVViewModel"
-    }
 }

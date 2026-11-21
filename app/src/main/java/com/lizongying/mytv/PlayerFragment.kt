@@ -1,137 +1,95 @@
 package com.lizongying.mytv
 
 import android.os.Bundle
-import android.util.Log
-import android.view.LayoutInflater
 import android.view.View
-import android.view.ViewGroup
-import android.view.ViewTreeObserver
-import androidx.annotation.OptIn
 import androidx.fragment.app.Fragment
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.common.VideoSize
-import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
 import com.lizongying.mytv.databinding.PlayerBinding
 import com.lizongying.mytv.models.TVViewModel
 
+class PlayerFragment : Fragment(R.layout.player), Player.Listener {
+    private var binding: PlayerBinding? = null
+    private var player: ExoPlayer? = null
+    private var channel: TVViewModel? = null
+    private var media: MediaItem? = null
+    private var failures = 0
+    private val retry = Runnable { channel?.changed("retry") }
 
-class PlayerFragment : Fragment() {
-
-    private var _binding: PlayerBinding? = null
-    private var playerView: PlayerView? = null
-    private var tvViewModel: TVViewModel? = null
-    private val aspectRatio = 16f / 9f
-
-    override fun onCreateView(
-        inflater: LayoutInflater, container: ViewGroup?,
-        savedInstanceState: Bundle?
-    ): View {
-        _binding = PlayerBinding.inflate(inflater, container, false)
-
-        playerView = _binding!!.playerView
-
-        playerView?.viewTreeObserver?.addOnGlobalLayoutListener(object :
-            ViewTreeObserver.OnGlobalLayoutListener {
-            @OptIn(UnstableApi::class)
-            override fun onGlobalLayout() {
-                playerView!!.viewTreeObserver.removeOnGlobalLayoutListener(this)
-
-//                val renderersFactory = context?.let { DefaultRenderersFactory(it) }
-//                renderersFactory?.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
-
-                playerView!!.player = activity?.let {
-                    ExoPlayer.Builder(it)
-//                        .setRenderersFactory(renderersFactory!!)
-                        .build()
-                }
-                playerView!!.player?.playWhenReady = true
-                playerView!!.player?.addListener(object : Player.Listener {
-                    override fun onVideoSizeChanged(videoSize: VideoSize) {
-                        val ratio = playerView?.measuredWidth?.div(playerView?.measuredHeight!!)
-                        if (ratio != null) {
-                            val layoutParams = playerView?.layoutParams
-                            if (ratio < aspectRatio) {
-                                layoutParams?.height =
-                                    (playerView?.measuredWidth?.div(aspectRatio))?.toInt()
-                                playerView?.layoutParams = layoutParams
-                            } else if (ratio > aspectRatio) {
-                                layoutParams?.width =
-                                    (playerView?.measuredHeight?.times(aspectRatio))?.toInt()
-                                playerView?.layoutParams = layoutParams
-                            }
-                        }
-                    }
-
-                    override fun onPlayerError(error: PlaybackException) {
-                        super.onPlayerError(error)
-                        Log.e(TAG, "PlaybackException $error")
-                        val err = "播放错误"
-                        tvViewModel?.setErrInfo(err)
-                        tvViewModel?.changed("retry")
-                    }
-
-                    override fun onIsPlayingChanged(isPlaying: Boolean) {
-                        super.onIsPlayingChanged(isPlaying)
-                        if (isPlaying) {
-                            tvViewModel?.setErrInfo("")
-                        }
-                    }
-                })
-            }
-        })
-        (activity as MainActivity).fragmentReady(TAG)
-        return _binding!!.root
-    }
-
-    @OptIn(UnstableApi::class)
-    fun play(tvViewModel: TVViewModel) {
-        this.tvViewModel = tvViewModel
-        playerView?.player?.run {
-            setMediaItem(MediaItem.fromUri(tvViewModel.getVideoUrlCurrent()))
-            prepare()
-            volume = tvViewModel.getTV().volume
-        }
+    override fun onViewCreated(view: View, state: Bundle?) {
+        binding = PlayerBinding.bind(view)
+        (requireActivity() as MainActivity).fragmentReady("PlayerFragment")
     }
 
     override fun onStart() {
-        Log.i(TAG, "onStart")
         super.onStart()
-        if (playerView != null && playerView!!.player?.isPlaying == false) {
-            Log.i(TAG, "replay")
-            playerView!!.player?.prepare()
-            playerView!!.player?.play()
+        val engine = ExoPlayer.Builder(requireContext()).build()
+        player = engine
+        binding?.playerView?.player = engine
+        engine.addListener(this)
+        engine.playWhenReady = true
+        prepareMedia()
+    }
+
+    fun select(model: TVViewModel, userTune: Boolean) {
+        if (channel !== model) {
+            channel = model
+            media = null
+            player?.stop()
+            player?.clearMediaItems()
+        }
+        if (userTune) {
+            view?.removeCallbacks(retry)
+            failures = 0
         }
     }
 
-    override fun onResume() {
-        Log.i(TAG, "onResume")
-        super.onResume()
+    fun play(model: TVViewModel) {
+        if (channel !== model) return
+        val index = model.videoIndex.value ?: return
+        val url = model.videoUrl.value?.getOrNull(index) ?: return
+        media = MediaItem.fromUri(url)
+        prepareMedia()
     }
 
-    override fun onPause() {
-        super.onPause()
-        if (playerView != null && playerView!!.player?.isPlaying == true) {
-            playerView!!.player?.stop()
+    private fun prepareMedia() {
+        val engine = player ?: return
+        val item = media ?: return
+        engine.volume = channel?.getTV()?.volume ?: 1f
+        engine.setMediaItem(item)
+        engine.prepare()
+    }
+
+    override fun onPlayerError(error: PlaybackException) {
+        channel?.setErrInfo("播放错误")
+        if (failures < 3) {
+            view?.removeCallbacks(retry)
+            view?.postDelayed(retry, 1_000L shl failures)
+            failures++
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        if (playerView != null) {
-            playerView!!.player?.release()
+    override fun onIsPlayingChanged(isPlaying: Boolean) {
+        if (isPlaying) {
+            failures = 0
+            view?.removeCallbacks(retry)
+            channel?.setErrInfo("")
         }
+    }
+
+    override fun onStop() {
+        view?.removeCallbacks(retry)
+        binding?.playerView?.player = null
+        player?.removeListener(this)
+        player?.release()
+        player = null
+        super.onStop()
     }
 
     override fun onDestroyView() {
+        binding = null
         super.onDestroyView()
-        _binding = null
-    }
-
-    companion object {
-        private const val TAG = "PlayerFragment"
     }
 }

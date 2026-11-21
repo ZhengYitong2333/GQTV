@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">我的电视 · 预览</string>
+    <bool name="preview_build">true</bool>
+</resources>

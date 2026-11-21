@@ -15,6 +15,7 @@ android {
         applicationId "com.lizongying.mytv"
         minSdk 17
         targetSdk 33
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         versionCode VersionCode()
         versionName VersionName()
 
@@ -24,7 +25,9 @@ android {
 
             // For ndk-build, instead use the ndkBuild block.
             cmake {
-                arguments "-DIS_SO_BUILD=${project.hasProperty('IS_SO_BUILD') ? project.IS_SO_BUILD : true}"
+                // Public checkouts ship the native library prebuilt for each supported ABI.
+                def hasNativeSources = file('src/main/cpp/native.c').isFile() && file('src/main/cpp/aes.c').isFile()
+                arguments "-DIS_SO_BUILD=${project.findProperty('IS_SO_BUILD') ?: hasNativeSources}"
 
                 abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
 //                abiFilters "armeabi-v7a", "arm64-v8a"
@@ -44,6 +47,10 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix ".preview"
+            versionNameSuffix "-preview"
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
@@ -100,6 +107,8 @@ static def VersionName() {
 }
 
 dependencies {
+    androidTestImplementation 'androidx.test:runner:1.5.0'
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
     implementation(libs.media3.ui)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.exoplayer.hls)

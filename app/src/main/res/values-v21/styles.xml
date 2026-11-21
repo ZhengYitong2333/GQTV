@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="TvRow.Switch" parent="TvSwitchBase">
+        <item name="android:showText">false</item>
+        <item name="android:splitTrack">false</item>
+    </style>
+</resources>

@@ -41,6 +41,17 @@ object SP {
         this.listener = listener
     }
 
+    fun clearListener(owner: OnSharedPreferenceChangeListener) {
+        if (listener === owner) listener = null
+    }
+
+    fun resetSettings() {
+        sp.edit().remove(KEY_CHANNEL_REVERSAL).remove(KEY_CHANNEL_NUM).remove(KEY_TIME)
+            .remove(KEY_GRID).remove(KEY_BOOT_STARTUP).remove(KEY_GUID).apply()
+        listener?.onSharedPreferenceChanged(KEY_GRID)
+        listener?.onSharedPreferenceChanged(KEY_TIME)
+    }
+
     var channelReversal: Boolean
         get() = sp.getBoolean(KEY_CHANNEL_REVERSAL, false)
         set(value) = sp.edit().putBoolean(KEY_CHANNEL_REVERSAL, value).apply()

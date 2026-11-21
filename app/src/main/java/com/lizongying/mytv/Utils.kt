@@ -17,24 +17,27 @@ import java.util.Date
 import java.util.Locale
 
 object Utils {
-    private var between: Long = 0
+    @Volatile private var between: Long = 0
 
     private var a: String = ""
     var b: String = ""
     private var c: String = ""
 
     private var listener: Request.RequestListener? = null
+    private val client by lazy { okhttp3.OkHttpClient.Builder().addInterceptor(RetryInterceptor(3)).build() }
 
     fun getDateFormat(format: String): String {
         return SimpleDateFormat(
             format,
             Locale.CHINA
-        ).format(Date(System.currentTimeMillis() - between))
+        ).format(Date(currentTimeMillis()))
     }
 
     fun getDateTimestamp(): Long {
-        return (System.currentTimeMillis() - between) / 1000
+        return currentTimeMillis() / 1000
     }
+
+    fun currentTimeMillis(): Long = System.currentTimeMillis() - between
 
     fun setBetween(currentTimeMillis: Long) {
         between = System.currentTimeMillis() - currentTimeMillis
@@ -88,6 +91,7 @@ object Utils {
             var tryCount = 0
             while (!response.isSuccessful && tryCount < maxRetry) {
                 tryCount++
+                response.close()
                 response = chain.proceed(request)
             }
             return response
@@ -100,9 +104,6 @@ object Utils {
      */
     private suspend fun getTimestampFromServer(): Long {
         return withContext(Dispatchers.IO) {
-            val client = okhttp3.OkHttpClient.Builder()
-                .addInterceptor(RetryInterceptor(3))
-                .build()
             val request = okhttp3.Request.Builder()
                 .url("https://api.m.taobao.com/rest/api3.do?api=mtop.common.getTimestamp")
                 .build()
@@ -122,9 +123,6 @@ object Utils {
 
     private suspend fun getNothing(): String {
         return withContext(Dispatchers.IO) {
-            val client = okhttp3.OkHttpClient.Builder()
-                .addInterceptor(RetryInterceptor(3))
-                .build()
             val request = okhttp3.Request.Builder()
                 .url("https://www.yangshipin.cn")
                 .build()
@@ -152,9 +150,6 @@ object Utils {
 
     private suspend fun getNothing2(x: String): String {
         return withContext(Dispatchers.IO) {
-            val client = okhttp3.OkHttpClient.Builder()
-                .addInterceptor(RetryInterceptor(3))
-                .build()
 
             val request = okhttp3.Request.Builder()
                 .url("https://www.yangshipin.cn/js/chunk-vendors.$x.js")
@@ -191,9 +186,6 @@ object Utils {
 
     private suspend fun getNothing3(x: String): String {
         return withContext(Dispatchers.IO) {
-            val client = okhttp3.OkHttpClient.Builder()
-                .addInterceptor(RetryInterceptor(3))
-                .build()
 
             val request = okhttp3.Request.Builder()
                 .url("https://www.yangshipin.cn/js/chunk-vendors.$x.js")
@@ -255,5 +247,9 @@ object Utils {
 
     fun setRequestListener(listener: Request.RequestListener) {
         this.listener = listener
+    }
+
+    fun clearListener(owner: Request.RequestListener) {
+        if (listener === owner) listener = null
     }
 }
