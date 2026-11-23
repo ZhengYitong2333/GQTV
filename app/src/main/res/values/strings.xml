@@ -4,7 +4,7 @@
     <string name="resolution_auto">自动</string>
     <string name="resolution_current">当前画面 %1$d × %2$d</string>
     <string name="resolution_fixed">当前源只有一个分辨率</string>
-    <string name="resolution_backup_source">当前线路为 IPTV-org 备用源</string>
+    <string name="resolution_backup_source">当前线路为内置备用源 %1$d/%2$d</string>
     <string name="resolution_waiting">播放开始后可查看分辨率</string>
     <string name="resolution_pixels">%1$d × %2$d</string>
     <string name="app_name">我的电视</string>

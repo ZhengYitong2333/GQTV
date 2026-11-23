@@ -26,7 +26,8 @@ class ResolutionFragment : DialogFragment() {
                     add(getString(R.string.resolution_current, current.first, current.second))
                     add(getString(R.string.resolution_fixed))
                 }
-                if (player.isUsingBackup()) add(getString(R.string.resolution_backup_source))
+                val line = player.backupPosition()
+                if (line != null) add(getString(R.string.resolution_backup_source, line.first, line.second))
             }
             return builder.setMessage(message.joinToString("\n")).setPositiveButton(android.R.string.ok, null).create()
         }

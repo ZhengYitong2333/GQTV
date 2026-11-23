@@ -1,6 +1,7 @@
 package com.lizongying.mytv.models
 
 import com.lizongying.mytv.R
+import com.lizongying.mytv.backupSource
 
 object TVList {
     val list: Map<String, List<TV>> by lazy {
@@ -930,9 +931,13 @@ object TVList {
         list.forEach { (k, v) ->
             val group = mutableListOf<TV>()
             v.forEach { v1 ->
-                if (!v1.mustToken) {
+                // Pay channels used to be dropped outright because they need a
+                // yangshipin token. Every one of them now has at least one
+                // verified public line, so keep them and start on the ladder.
+                if (!v1.mustToken || backupSource(v1.alias) != null) {
                     v1.id = id
                     v1.needToken = false
+                    v1.backupOnly = v1.mustToken
                     id++
                     group.add(v1)
                 }

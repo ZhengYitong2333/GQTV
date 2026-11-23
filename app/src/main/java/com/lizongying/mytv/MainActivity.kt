@@ -183,7 +183,15 @@ class MainActivity : FragmentActivity(), Request.RequestListener, OnSharedPrefer
             if (onRelease) onBackPressed()
             return true
         }
-        if (!browser.isHidden) return false
+        if (!browser.isHidden) {
+            // Digits are a jump-to-channel shortcut while browsing; elsewhere
+            // they open the number overlay and tune directly.
+            if (code in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) {
+                if (onRelease) browser.typeDigit((code - KeyEvent.KEYCODE_0).toString())
+                return true
+            }
+            return false
+        }
         when (code) {
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
             KeyEvent.KEYCODE_DPAD_LEFT -> if (onRelease) openBrowser()

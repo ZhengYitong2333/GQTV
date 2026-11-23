@@ -20,6 +20,7 @@ import com.tencent.videolite.android.datamodel.cctvjce.TVProgram
 import java.io.File
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -246,6 +247,87 @@ class TvRemoteTest {
         key(KeyEvent.KEYCODE_DPAD_LEFT)
         key(KeyEvent.KEYCODE_BACK)
         awaitUi("cancel browse") { browser(it).isHidden && SP.itemPosition == documentaryIndex + 8 }
+    }
+
+    // ---- group strip / number jump / backup ladder -------------------------
+
+    /** Group name -> index of its first channel, matching the strip's order. */
+    private fun groupStarts(): List<Pair<String, Int>> {
+        var offset = 0
+        return TVList.list.map { (name, list) -> name to offset.also { offset += list.size } }
+    }
+
+    private fun strip(activity: MainActivity) =
+        activity.findViewById<android.widget.LinearLayout>(R.id.groups)
+
+    private fun stripFocus(activity: MainActivity): Int {
+        val groups = strip(activity) ?: return -1
+        for (i in 0 until groups.childCount) if (groups.getChildAt(i).isFocused) return i
+        return -1
+    }
+
+    private fun openBrowserAndFocusStrip() {
+        key(KeyEvent.KEYCODE_DPAD_LEFT)
+        awaitUi("browser open") { !browser(it).isHidden }
+        key(KeyEvent.KEYCODE_DPAD_UP)
+        awaitUi("focus entered the strip") { stripFocus(it) >= 0 }
+    }
+
+    @Test fun groupStripWalksEveryGroupAndJumpsToItsFirstChannel() {
+        val groups = groupStarts()
+        assertEquals(listOf("央视", "地方", "港澳台", "国际"), groups.map { it.first })
+        openBrowserAndFocusStrip()
+
+        // LEFT/RIGHT step along the strip and stop at the ends instead of
+        // dropping focus into the card row below.
+        key(KeyEvent.KEYCODE_DPAD_LEFT, groups.size)
+        awaitUi("left edge holds") { stripFocus(it) == 0 }
+        key(KeyEvent.KEYCODE_DPAD_RIGHT, groups.size - 1)
+        awaitUi("last chip reached") { stripFocus(it) == groups.size - 1 }
+        key(KeyEvent.KEYCODE_DPAD_RIGHT)
+        awaitUi("right edge holds") { stripFocus(it) == groups.size - 1 }
+
+        groups.forEachIndexed { i, (name, first) ->
+            scenario.onActivity { strip(it)!!.getChildAt(i).requestFocus() }
+            awaitUi("chip $name focused") { stripFocus(it) == i }
+            key(KeyEvent.KEYCODE_DPAD_CENTER)
+            awaitUi("jumped to $name") { focusedChannel(it) == first }
+            assertEquals("jumping must not tune", documentaryIndex, SP.itemPosition)
+        }
+    }
+
+    @Test fun digitsInBrowserMoveFocusWithoutTuning() {
+        openBrowserAndFocusStrip()
+        val target = catalog.indexOfFirst { it.id + 1 == 13 }
+        assertTrue(target >= 0)
+        // DPAD_DOWN puts focus back in the card row before typing.
+        key(KeyEvent.KEYCODE_DPAD_DOWN)
+        key(KeyEvent.KEYCODE_1)
+        key(KeyEvent.KEYCODE_3)
+        awaitUi("two digits jump the card focus") { focusedChannel(it) == target }
+        assertEquals("digit jump must not tune", documentaryIndex, SP.itemPosition)
+        awaitUi("digit overlay hidden") {
+            it.findViewById<TextView>(R.id.jump)?.visibility == android.view.View.GONE
+        }
+    }
+
+    @Test fun backupLadderStartsAtTheFirstLineAndReportsItsPosition() {
+        scenario.onActivity { host ->
+            val channel = browser(host).currentChannel!!
+            // tryBackup only applies to channels that arrived with their own
+            // source, so give this one a pid back for the duration of the test.
+            channel.getTV().pid = "test"
+            assertTrue(host.tryBackup(channel))
+        }
+        awaitUi("backup line one of the ladder") {
+            val line = it.playbackSettings().backupPosition()
+            line != null && line.first == 1 && line.second == backupStreams.getValue("CCTV9").size
+        }
+        scenario.onActivity { host ->
+            // Already walking the ladder: the caller must not re-enter it.
+            assertFalse(host.tryBackup(browser(host).currentChannel!!))
+            assertTrue(host.playbackSettings().isUsingBackup())
+        }
     }
 
     @Test fun gridAndPlaybackShortcutsUseTheSameChannelOrder() {

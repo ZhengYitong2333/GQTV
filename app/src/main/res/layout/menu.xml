@@ -14,10 +14,24 @@
             android:maxLines="1" android:ellipsize="end" android:textSize="34sp" android:textStyle="bold" android:textColor="@color/white" />
         <TextView android:id="@+id/up_next" android:layout_width="match_parent" android:layout_height="wrap_content"
             android:maxLines="1" android:ellipsize="end" android:textSize="13sp" android:textColor="#E0EAF0" />
+        <HorizontalScrollView android:id="@+id/group_strip" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="12dp" android:background="@drawable/tv_chip_strip"
+            android:clipToPadding="false" android:focusable="false" android:paddingStart="5dp"
+            android:paddingTop="5dp" android:paddingEnd="5dp" android:paddingBottom="5dp"
+            android:scrollbars="none">
+            <LinearLayout android:id="@+id/groups" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:focusable="false" android:orientation="horizontal" />
+        </HorizontalScrollView>
         <androidx.recyclerview.widget.RecyclerView android:id="@+id/items" android:layout_width="match_parent" android:layout_height="78dp"
-            android:padding="5dp" android:layout_marginTop="16dp" android:background="@drawable/tv_panel"
+            android:padding="5dp" android:layout_marginTop="8dp" android:background="@drawable/tv_panel"
             android:descendantFocusability="afterDescendants" android:clipToPadding="true" android:scrollbars="none" />
         <include android:id="@+id/keys" layout="@layout/tv_remote_keys"
             android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="end" android:layout_marginTop="8dp" />
     </LinearLayout>
+    <TextView android:id="@+id/jump" android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal" android:layout_marginBottom="186dp"
+        android:background="@drawable/tv_panel" android:paddingStart="18dp" android:paddingEnd="18dp"
+        android:paddingTop="8dp" android:paddingBottom="8dp" android:visibility="gone"
+        android:textColor="@color/white" android:textSize="18sp" android:textStyle="bold"
+        android:importantForAccessibility="no" />
 </FrameLayout>

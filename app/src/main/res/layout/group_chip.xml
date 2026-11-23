@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content" android:layout_height="28dp"
+    android:layout_marginEnd="6dp" android:background="@drawable/tv_chip"
+    android:clickable="true" android:focusable="true" android:gravity="center"
+    android:includeFontPadding="false" android:paddingStart="13dp" android:paddingEnd="13dp"
+    android:textColor="@color/tv_chip_text" android:textSize="13sp" />

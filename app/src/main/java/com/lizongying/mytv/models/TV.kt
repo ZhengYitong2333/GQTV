@@ -16,6 +16,8 @@ data class TV(
     var needToken: Boolean = false,
     var mustToken: Boolean = false,
     var volume: Float = 0.1F,
+    // No in-app source at all: the channel starts straight from BackupStreams.
+    var backupOnly: Boolean = false,
 ) : Serializable {
 
     override fun toString(): String {

@@ -21,6 +21,8 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     private var channel: TVViewModel? = null
     private var media: MediaItem? = null
     private var usingBackup = false
+    private var backupLine = 0
+    private var retriedLine = false
     private var selectedHeight: Int? = null
     private var failures = 0
     private val retry = Runnable {
@@ -48,6 +50,8 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
             channel = model
             media = null
             usingBackup = false
+            backupLine = 0
+            retriedLine = false
             selectedHeight = null
             failures = 0
             setVideoTrack(null)
@@ -64,14 +68,28 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         prepareMedia()
     }
 
+    /**
+     * Enters backup playback for a channel whose own source just failed.
+     * Once here, [retry] walks down the remaining verified lines.
+     */
     fun tryBackup(model: TVViewModel): Boolean {
-        if (channel !== model || usingBackup || model.getTV().pid.isEmpty()) return false
-        val url = iptvOrgStreams[model.getTV().alias] ?: return false
+        if (usingBackup) return false
+        return advanceBackup(model)
+    }
+
+    /** Plays backup line 0, or one past the current line when already in backup. */
+    private fun advanceBackup(model: TVViewModel): Boolean {
+        if (channel !== model || model.getTV().pid.isEmpty()) return false
+        val lines = backupSource(model.getTV().alias) ?: return false
+        val next = if (usingBackup) backupLine + 1 else 0
+        if (next !in lines.indices) return false
         view?.removeCallbacks(retry)
         usingBackup = true
+        backupLine = next
+        retriedLine = false
         failures = 0
         setVideoTrack(null)
-        media = MediaItem.fromUri(url)
+        media = MediaItem.fromUri(lines[next])
         prepareMedia()
         return true
     }
@@ -82,6 +100,13 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
 
     internal fun resolutionSelection(): Int? = selectedHeight
     internal fun isUsingBackup() = usingBackup
+
+    /** 1-based line number and total lines, or null when playing the app's own source. */
+    internal fun backupPosition(): Pair<Int, Int>? {
+        if (!usingBackup) return null
+        val total = channel?.getTV()?.alias?.let { backupSource(it)?.size } ?: return null
+        return (backupLine + 1) to total
+    }
 
     @OptIn(UnstableApi::class)
     internal fun resolutionOptions(): List<Pair<Int, Int>> = videoTracks().distinctBy { it.first }
@@ -129,9 +154,21 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     }
 
     override fun onPlayerError(error: PlaybackException) {
-        val currentMedia = media
-        channel?.setErrInfo("播放错误")
-        if (media !== currentMedia) return
+        val model = channel ?: return
+        if (usingBackup) {
+            // One retry per line for a transient blip, then move to the next
+            // verified line. The error overlay only appears once the list ends,
+            // so a channel that recovers never flashes an error on screen.
+            if (!retriedLine) {
+                retriedLine = true
+                view?.removeCallbacks(retry)
+                view?.postDelayed(retry, 1_000L)
+            } else if (!advanceBackup(model)) {
+                model.setErrInfo("播放错误")
+            }
+            return
+        }
+        model.setErrInfo("播放错误")
         if (failures < 3) {
             view?.removeCallbacks(retry)
             view?.postDelayed(retry, 1_000L shl failures)
@@ -142,6 +179,7 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     override fun onIsPlayingChanged(isPlaying: Boolean) {
         if (isPlaying) {
             failures = 0
+            retriedLine = false
             view?.removeCallbacks(retry)
             channel?.setErrInfo("")
         }
