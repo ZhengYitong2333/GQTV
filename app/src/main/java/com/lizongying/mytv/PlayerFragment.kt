@@ -365,9 +365,9 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         health?.rendered()
         if (timing?.frame(player?.videoSize?.width ?: 0, player?.videoSize?.height ?: 0) == true) {
             view?.postDelayed(finishQualityWindow, 30_000)
+            val route = backupPosition()?.let { (line, count) -> "备用 $line/$count" } ?: "主源"
+            Log.i("PlaybackHealth", "${channel?.getTV()?.alias} $route 首帧 ${SystemClock.elapsedRealtime() - tuneStarted}ms")
         }
-        val route = backupPosition()?.let { (line, count) -> "备用 $line/$count" } ?: "主源"
-        Log.i("PlaybackHealth", "${channel?.getTV()?.alias} $route 首帧 ${SystemClock.elapsedRealtime() - tuneStarted}ms")
     }
 
     override fun onPlaybackStateChanged(playbackState: Int) {
