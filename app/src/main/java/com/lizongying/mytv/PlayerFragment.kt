@@ -3,6 +3,7 @@ package com.lizongying.mytv
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
+import android.view.SurfaceView
 import android.view.View
 import androidx.annotation.OptIn
 import androidx.fragment.app.Fragment
@@ -14,6 +15,8 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.ui.PlayerView
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.ExoPlayer
 import com.lizongying.mytv.databinding.PlayerBinding
 import com.lizongying.mytv.models.TVViewModel
@@ -21,6 +24,13 @@ import com.lizongying.mytv.requests.Request
 
 class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     private var binding: PlayerBinding? = null
+    private var outputView: PlayerView? = null
+    private val frameListener = object : AnalyticsListener {
+        override fun onRenderedFirstFrame(eventTime: AnalyticsListener.EventTime, output: Any, renderTimeMs: Long) {
+            renderedOn(output)
+        }
+    }
+
     private var player: ExoPlayer? = null
     private var channel: TVViewModel? = null
     private var media: MediaItem? = null
@@ -102,14 +112,31 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
 
     override fun onViewCreated(view: View, state: Bundle?) {
         binding = PlayerBinding.bind(view)
+        replaceOutput()
         (requireActivity() as MainActivity).fragmentReady("PlayerFragment")
+    }
+
+    // A SurfaceView can retain the last submitted video buffer after the playlist is cleared.
+    // Keep the decoder pipeline's player, but give each tune its own presentation surface.
+    private fun replaceOutput() {
+        val ui = binding ?: return
+        ui.tuneCover.visibility = View.VISIBLE
+        outputView?.let {
+            it.player = null
+            ui.root.removeView(it)
+        }
+        val next = layoutInflater.inflate(R.layout.video_output, ui.root, false) as PlayerView
+        outputView = next
+        ui.root.addView(next, 0)
+        next.player = player
     }
 
     override fun onStart() {
         super.onStart()
         val engine = ExoPlayer.Builder(requireContext()).build()
         player = engine
-        binding?.playerView?.player = engine
+        outputView?.player = engine
+        engine.addAnalyticsListener(frameListener)
         engine.addListener(this)
         engine.playWhenReady = true
         if (channel != null) startAttempt()
@@ -133,8 +160,9 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
             selectedHeight = null
             failures = 0
             setVideoTrack(null)
-            // Clearing the playlist also detaches the old source and closes the PlayerView shutter.
+            val hadVideo = player?.currentMediaItem != null
             player?.clearMediaItems()
+            if (hadVideo) replaceOutput()
         }
     }
 
@@ -281,13 +309,17 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         }
     }
 
-    override fun onRenderedFirstFrame() {
+    internal fun renderedOn(output: Any) {
+        val surfaceView = outputView?.videoSurfaceView as? SurfaceView ?: return
+        if (output !== surfaceView.holder.surface) return
         val item = media ?: return
         if (player?.currentMediaItem != item) return
+        binding?.tuneCover?.visibility = View.GONE
         if (reportedFrame) return
         reportedFrame = true
         health?.rendered()
-        Log.i("PlaybackHealth", "${channel?.getTV()?.alias} 首帧 ${SystemClock.elapsedRealtime() - tuneStarted}ms")
+        val route = backupPosition()?.let { (line, count) -> "备用 $line/$count" } ?: "主源"
+        Log.i("PlaybackHealth", "${channel?.getTV()?.alias} $route 首帧 ${SystemClock.elapsedRealtime() - tuneStarted}ms")
     }
 
     override fun onPlaybackStateChanged(playbackState: Int) {
@@ -321,7 +353,9 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         health = null
         view?.removeCallbacks(monitor)
         view?.removeCallbacks(retry)
-        binding?.playerView?.player = null
+        binding?.tuneCover?.visibility = View.VISIBLE
+        player?.removeAnalyticsListener(frameListener)
+        outputView?.player = null
         player?.removeListener(this)
         player?.release()
         player = null
@@ -329,6 +363,7 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     }
 
     override fun onDestroyView() {
+        outputView = null
         binding = null
         super.onDestroyView()
     }

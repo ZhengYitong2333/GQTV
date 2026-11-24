@@ -470,13 +470,32 @@ class TvRemoteTest {
         }
     }
 
+    @Test fun delayedOldFrameCannotRevealRapidRetuneToSameUrl() {
+        scenario.onActivity { host ->
+            val previousView = host.findViewById<PlayerView>(R.id.player_view)
+            val oldSurface = (previousView.videoSurfaceView as android.view.SurfaceView).holder.surface
+            val engine = previousView.player
+            host.play(documentaryIndex + 1)
+            host.play(documentaryIndex)
+            val nextView = host.findViewById<PlayerView>(R.id.player_view)
+            assertTrue(engine === nextView.player)
+            assertFalse(previousView.videoSurfaceView === nextView.videoSurfaceView)
+            host.playbackSettings().renderedOn(oldSurface)
+            assertEquals(android.view.View.VISIBLE, host.findViewById<android.view.View>(R.id.tune_cover).visibility)
+        }
+        awaitUi("only the new surface reveals the picture") {
+            it.findViewById<android.view.View>(R.id.tune_cover).visibility == android.view.View.GONE &&
+                it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true
+        }
+    }
+
     @Test fun pendingRetuneCoversOldVideoUntilNewFrame() {
         scenario.onActivity { host ->
             testLines = emptyList()
             browser(host).requestPrimary = {}
             host.play(documentaryIndex + 1)
         }
-        val shutterId = androidx.media3.ui.R.id.exo_shutter
+        val shutterId = R.id.tune_cover
         awaitUi("old surface covered") {
             it.findViewById<android.view.View>(shutterId).visibility == android.view.View.VISIBLE
         }

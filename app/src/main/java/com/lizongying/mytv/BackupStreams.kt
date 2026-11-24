@@ -74,7 +74,6 @@ internal val backupStreams: Map<String, List<String>> = mapOf(
         "http://222.223.41.27:8888/hls/8/index.m3u8",
         "http://183.129.255.66:8480/hls/9/index.m3u8",
         "http://38.75.136.137:98/gslb/dsdqpub/cctv8hd.m3u8?auth=testpub",
-        "http://1.24.39.180:9003/hls/8/index.m3u8",
     ),
     "CCTV9" to listOf(
         "http://221.7.175.154:8445/tsfile/live/1007_1.m3u8?key=txiptv&playlive=1&authid=0",
