@@ -7,7 +7,7 @@
     <string name="resolution_backup_source">内置备用源　%1$d/%2$d</string>
     <string name="resolution_waiting">播放开始后可查看分辨率</string>
     <string name="resolution_pixels">%1$d × %2$d</string>
-    <string name="app_name">小屁TV</string>
+    <string name="app_name">GQTV</string>
     <bool name="preview_build">false</bool>
     <string name="settings_title">设置</string>
     <string name="more_settings">更多设置</string>
