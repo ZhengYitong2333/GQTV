@@ -32,7 +32,9 @@ class MainActivity : FragmentActivity(), Request.RequestListener, OnSharedPrefer
     private val ready = mutableSetOf<String>()
     private var playbackStarted = false
     private var resumed = false
-    private var lastChannelStep = 0L
+    private var heldKey: Int? = null
+    private var previewPosition: Int? = null
+    private var lastPreview = 0L
     private var requestedErrorVisible: Boolean? = null
     private var lastBack = -2_000L
     private val hideBrowser = Runnable { closeBrowser() }
@@ -104,7 +106,7 @@ class MainActivity : FragmentActivity(), Request.RequestListener, OnSharedPrefer
     fun showInfoFragment(channel: TVViewModel) {
         if (!browser.isHidden || supportFragmentManager.findFragmentByTag(SettingFragment.TAG) != null) return
         info.show(channel)
-        if (SP.channelNum) numbers.show(channel)
+        if (SP.channelNum && previewPosition == null) numbers.show(channel)
     }
 
     fun setPlaybackError(message: String) {
@@ -118,7 +120,7 @@ class MainActivity : FragmentActivity(), Request.RequestListener, OnSharedPrefer
         tx.commit()
     }
 
-    fun selectChannel(channel: TVViewModel, userTune: Boolean) = player.select(channel, userTune)
+    fun selectChannel(channel: TVViewModel, userTune: Boolean, cold: Boolean) = player.select(channel, userTune, cold)
     fun play(channel: TVViewModel) = player.play(channel)
     fun tryBackup(channel: TVViewModel, beforePrimary: Boolean = false) = player.tryBackup(channel, beforePrimary)
     internal fun playbackSettings() = player
@@ -178,6 +180,7 @@ class MainActivity : FragmentActivity(), Request.RequestListener, OnSharedPrefer
     private fun handleRemote(event: KeyEvent): Boolean {
         if (!::browser.isInitialized) return false
         val code = event.keyCode
+        if (heldKey != null && heldKey != code && event.action == KeyEvent.ACTION_DOWN) cancelChannelPreview()
         val onRelease = event.action == KeyEvent.ACTION_UP && !event.isCanceled
         if (code == KeyEvent.KEYCODE_MENU || code == KeyEvent.KEYCODE_SETTINGS ||
             code == KeyEvent.KEYCODE_HELP || code == KeyEvent.KEYCODE_BOOKMARK) {
@@ -203,11 +206,23 @@ class MainActivity : FragmentActivity(), Request.RequestListener, OnSharedPrefer
             KeyEvent.KEYCODE_DPAD_RIGHT -> if (onRelease) openSettings()
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP,
             KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> {
-                if (event.action == KeyEvent.ACTION_DOWN &&
-                    (event.repeatCount == 0 || event.eventTime - lastChannelStep >= 300)) {
-                    lastChannelStep = event.eventTime
-                    val up = code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_CHANNEL_UP
-                    browser.step(if (up == SP.channelReversal) 1 else -1)
+                val up = code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_CHANNEL_UP
+                val delta = if (up == SP.channelReversal) 1 else -1
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                    cancelChannelPreview()
+                    heldKey = code
+                    lastPreview = event.eventTime
+                    browser.step(delta)
+                } else if (heldKey == code && event.action == KeyEvent.ACTION_DOWN &&
+                    event.eventTime - lastPreview >= 250) {
+                    lastPreview = event.eventTime
+                    val target = browser.steppedPosition(previewPosition, delta)
+                    previewPosition = target
+                    numbers.preview(target + 1)
+                } else if (heldKey == code && event.action == KeyEvent.ACTION_UP) {
+                    val target = previewPosition
+                    cancelChannelPreview()
+                    if (onRelease && target != null && target != SP.itemPosition) browser.play(target)
                 }
             }
             in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 ->
@@ -238,7 +253,14 @@ class MainActivity : FragmentActivity(), Request.RequestListener, OnSharedPrefer
         }
     }
 
+    private fun cancelChannelPreview() {
+        if (previewPosition != null) numbers.clear()
+        previewPosition = null
+        heldKey = null
+    }
+
     override fun onPause() {
+        cancelChannelPreview()
         resumed = false
         handler.removeCallbacks(hideBrowser)
         super.onPause()

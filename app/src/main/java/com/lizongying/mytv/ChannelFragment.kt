@@ -31,6 +31,13 @@ class ChannelFragment : Fragment(R.layout.channel) {
         ui.root.postDelayed(hide, 5_000)
     }
 
+    fun preview(number: Int) {
+        val ui = binding ?: return
+        clear()
+        ui.content.text = number.toString()
+        ui.root.isVisible = true
+    }
+
     fun show(digit: String) {
         val ui = binding ?: return
         ui.root.removeCallbacks(hide)

@@ -31,7 +31,9 @@ import com.lizongying.mytv.proto.Ysp.cn.yangshipin.oms.common.proto.pageModel
 import com.lizongying.mytv.proto.Ysp.cn.yangshipin.omstv.common.proto.epgProgramModel
 import com.tencent.videolite.android.datamodel.cctvjce.TVTimeShiftProgramRequest
 import com.tencent.videolite.android.datamodel.cctvjce.TVTimeShiftProgramResponse
+import com.lizongying.mytv.backupSource
 import retrofit2.Call
+import com.lizongying.mytv.backupSource
 import retrofit2.Callback
 import retrofit2.Response
 import javax.crypto.Cipher
@@ -42,9 +44,12 @@ import kotlin.random.Random
 
 object Request {
     private const val TAG = "Request"
+    // The instrumentation benchmark alternates policies in the same binary.
+    internal var legacyAuthRetries = false
+
     private var yspTokenService: YSPTokenService = ApiClient().yspTokenService
     private var yspToken2Service: YSPApiService = ApiClient().yspToken2Service
-    private var yspApiService: YSPApiService = ApiClient().yspApiService
+    internal var yspApiService: YSPApiService = ApiClient().yspApiService
     private var yspBtraceService: YSPBtraceService = ApiClient().yspBtraceService
     private var yspBtraceService2: YSPBtraceService = ApiClient().yspBtraceService2
     private var yspBtraceService3: YSPBtraceService = ApiClient().yspBtraceService3
@@ -99,11 +104,12 @@ object Request {
         callToken = yspToken2Service.getToken("guid=${YSP.getGuid()}; $cookie",  "519748109", YSP.getGuid(),  "59306155", "b42702bf7309a179d102f3d51b1add2fda0bc7ada64cb801" ,"1", YSP.getTimeStr())
         callToken?.enqueue(object : Callback<Token2> {
             override fun onResponse(call: Call<Token2>, response: Response<Token2>) {
+                if (call.isCanceled) return
                 if (response.isSuccessful) {
                     val liveInfo = response.body()
 
                     if (liveInfo?.data?.token != null) {
-                        Log.i(TAG, "token ${liveInfo.data.token}")
+                        Log.i(TAG, "token ok")
                         YSP.token2 = liveInfo.data.token
 
                         YSP.getTokenData(tvModel)
@@ -167,7 +173,7 @@ object Request {
 
             override fun onFailure(call: Call<Token2>, t: Throwable) {
                 if (call.isCanceled) return
-                Log.e(TAG, "$title token request error $t")
+                Log.e(TAG, "$title token request error ${t.javaClass.simpleName}")
                 if (tvModel.retryTimes < tvModel.retryMaxTimes) {
                     tvModel.retryTimes++
                     if (tvModel.getTV().needToken) {
@@ -196,7 +202,7 @@ object Request {
         })
     }
 
-    private fun fetchAuth(tvModel: TVViewModel, cookie: String) {
+    internal fun fetchAuth(tvModel: TVViewModel, cookie: String) {
         cancelCall()
 
         val title = tvModel.getTV().title
@@ -204,98 +210,51 @@ object Request {
         val data = YSP.getAuthData(tvModel)
         val request = AuthRequest(data)
         callAuth = request.let { yspApiService.getAuth("guid=${YSP.getGuid()}; $cookie", it) }
+        val authAttempt = ++tvModel.authRequests
+        fun onAuthFailure(status: Int?, transient: Boolean, message: String) {
+            Log.i(TAG, "tune=${tvModel.tuneId} channel=$title route=primary authStatus=${status ?: 0} authAttempt=$authAttempt")
+            if (!legacyAuthRetries && !backupSource(tvModel.getTV().alias).isNullOrEmpty()) {
+                if (transient && tvModel.authYSPRetryTimes == 0) {
+                    tvModel.authYSPRetryTimes++
+                    fetchAuth(tvModel, cookie)
+                } else tvModel.setErrInfo("主源鉴权失败")
+                return
+            }
+
+            if (tvModel.retryTimes >= tvModel.retryMaxTimes) {
+                tvModel.setErrInfo(message)
+                return
+            }
+            tvModel.retryTimes++
+            val tv = tvModel.getTV()
+            when {
+                tv.needToken && needToken && tvModel.tokenYSPRetryTimes < tvModel.tokenYSPRetryMaxTimes -> {
+                    tvModel.tokenYSPRetryTimes++
+                    tvModel.needGetToken = true
+                    fetchAuth(tvModel)
+                }
+                tv.needToken && tv.mustToken -> tvModel.setErrInfo("错误")
+                else -> fetchAuth(tvModel, cookie)
+            }
+        }
+
         callAuth?.enqueue(object : Callback<Auth> {
             override fun onResponse(call: Call<Auth>, response: Response<Auth>) {
-                if (response.isSuccessful) {
-                    val liveInfo = response.body()
-
-                    if (liveInfo?.data?.token != null) {
-                        Log.i(TAG, "auth ${liveInfo.data.token}")
-                        YSP.token = liveInfo.data.token
-                        fetchVideo(tvModel, cookie)
-                    } else {
-                        Log.e(TAG, "$title auth error")
-                        if (tvModel.retryTimes < tvModel.retryMaxTimes) {
-                            tvModel.retryTimes++
-                            if (tvModel.getTV().needToken) {
-                                if (needToken && tvModel.tokenYSPRetryTimes < tvModel.tokenYSPRetryMaxTimes) {
-                                    tvModel.tokenYSPRetryTimes++
-                                    tvModel.needGetToken = true
-                                    fetchAuth(tvModel)
-                                } else {
-                                    if (!tvModel.getTV().mustToken) {
-                                        fetchAuth(tvModel, cookie)
-                                    } else {
-                                        val err = "错误"
-                                        Log.e(TAG, "$title $err")
-                                        tvModel.setErrInfo(err)
-                                    }
-                                }
-                            } else {
-                                fetchAuth(tvModel, cookie)
-                            }
-                        } else {
-                            val err = "认证结果错误"
-                            Log.e(TAG, "$title $err")
-                            tvModel.setErrInfo(err)
-                        }
-                    }
+                if (call.isCanceled || call !== callAuth) return
+                val code = response.code()
+                val authToken = response.body()?.data?.token
+                if (response.isSuccessful && authToken != null) {
+                    YSP.token = authToken
+                    fetchVideo(tvModel, cookie)
                 } else {
-                    Log.e(TAG, "$title auth status error")
-                    if (tvModel.retryTimes < tvModel.retryMaxTimes) {
-                        tvModel.retryTimes++
-                        if (tvModel.getTV().needToken) {
-                            if (needToken && tvModel.tokenYSPRetryTimes < tvModel.tokenYSPRetryMaxTimes) {
-                                tvModel.tokenYSPRetryTimes++
-                                tvModel.needGetToken = true
-                                fetchAuth(tvModel)
-                            } else {
-                                if (!tvModel.getTV().mustToken) {
-                                    fetchAuth(tvModel, cookie)
-                                } else {
-                                    val err = "错误"
-                                    Log.e(TAG, "$title $err")
-                                    tvModel.setErrInfo(err)
-                                }
-                            }
-                        } else {
-                            fetchAuth(tvModel, cookie)
-                        }
-                    } else {
-                        val err = "认证状态错误"
-                        Log.e(TAG, "$title $err")
-                        tvModel.setErrInfo(err)
-                    }
+                    val transient = code in 500..599 && code != 501 && code != 505 || code == 408 || code == 429
+                    onAuthFailure(code, transient, if (response.isSuccessful) "认证结果错误" else "认证状态错误")
                 }
             }
 
             override fun onFailure(call: Call<Auth>, t: Throwable) {
-                if (call.isCanceled) return
-                Log.e(TAG, "$title auth request error $t")
-                if (tvModel.retryTimes < tvModel.retryMaxTimes) {
-                    tvModel.retryTimes++
-                    if (tvModel.getTV().needToken) {
-                        if (needToken && tvModel.tokenYSPRetryTimes < tvModel.tokenYSPRetryMaxTimes) {
-                            tvModel.tokenYSPRetryTimes++
-                            tvModel.needGetToken = true
-                            fetchAuth(tvModel)
-                        } else {
-                            if (!tvModel.getTV().mustToken) {
-                                fetchAuth(tvModel, cookie)
-                            } else {
-                                val err = "错误"
-                                Log.e(TAG, "$title $err")
-                                tvModel.setErrInfo(err)
-                            }
-                        }
-                    } else {
-                        fetchAuth(tvModel, cookie)
-                    }
-                } else {
-                    val err = "认证请求错误"
-                    Log.e(TAG, "$title $err")
-                    tvModel.setErrInfo(err)
-                }
+                if (call.isCanceled || call !== callAuth) return
+                onAuthFailure(null, t is java.io.IOException, "认证请求错误")
             }
         })
     }
@@ -328,13 +287,14 @@ object Request {
 
         call?.enqueue(object : Callback<LiveInfo> {
             override fun onResponse(call: Call<LiveInfo>, response: Response<LiveInfo>) {
+                if (call.isCanceled) return
                 if (response.isSuccessful) {
                     val liveInfo = response.body()
 
                     if (liveInfo?.data?.playurl != null) {
                         if (liveInfo.data.extended_param != null) {
                             val url = liveInfo.data.playurl + "&revoi=" + liveInfo.data.extended_param
-                            Log.d(TAG, "$title url $url")
+                            Log.d(TAG, "$title address ready")
                             tvModel.addVideoUrl(url)
                             tvModel.allReady()
                             tvModel.retryTimes = 0
@@ -385,7 +345,7 @@ object Request {
                             Log.e(TAG, "$title $err")
                             tvModel.setErrInfo(err)
                         } else {
-                            Log.e(TAG, "$title url error $request $liveInfo")
+                            Log.e(TAG, "$title address unavailable")
                             if (tvModel.retryTimes < tvModel.retryMaxTimes) {
                                 tvModel.retryTimes++
                                 if (tvModel.getTV().needToken) {
@@ -425,7 +385,7 @@ object Request {
                         }
                     }
                 } else {
-                    Log.e(TAG, "$title status error $data")
+                    Log.e(TAG, "$title video status error code=${response.code()}")
                     if (tvModel.retryTimes < tvModel.retryMaxTimes) {
                         tvModel.retryTimes++
                         if (tvModel.getTV().needToken) {
@@ -467,7 +427,7 @@ object Request {
 
             override fun onFailure(call: Call<LiveInfo>, t: Throwable) {
                 if (call.isCanceled) return
-                Log.e(TAG, "$title fetchVideo request error $t")
+                Log.e(TAG, "$title fetchVideo request error ${t.javaClass.simpleName}")
                 if (tvModel.retryTimes < tvModel.retryMaxTimes) {
                     tvModel.retryTimes++
                     if (tvModel.getTV().needToken) {
@@ -500,9 +460,10 @@ object Request {
             callInfo = yspTokenService.getInfo("")
             callInfo?.enqueue(object : Callback<Info> {
                 override fun onResponse(call: Call<Info>, response: Response<Info>) {
+                    if (call.isCanceled) return
                     if (response.isSuccessful && response.body()?.data?.token != null) {
                         token = response.body()?.data?.token!!
-                        Log.i(TAG, "info success $token")
+                        Log.i(TAG, "info success ok")
                         tvModel.needGetToken = false
                         tvModel.tokenYSPRetryTimes = 0
                         val cookie =
@@ -533,7 +494,7 @@ object Request {
 
                 override fun onFailure(call: Call<Info>, t: Throwable) {
                     if (call.isCanceled) return
-                    Log.e(TAG, "info request error $t")
+                    Log.e(TAG, "info request error ${t.javaClass.simpleName}")
                     if (tvModel.tokenYSPRetryTimes < tvModel.tokenYSPRetryMaxTimes) {
                         tvModel.tokenYSPRetryTimes++
                         fetchAuth(tvModel)
@@ -561,9 +522,10 @@ object Request {
             callInfo = yspTokenService.getInfo("")
             callInfo?.enqueue(object : Callback<Info> {
                 override fun onResponse(call: Call<Info>, response: Response<Info>) {
+                    if (call.isCanceled) return
                     if (response.isSuccessful && response.body()?.data?.token != null) {
                         token = response.body()?.data?.token!!
-                        Log.i(TAG, "info success $token")
+                        Log.i(TAG, "info success ok")
                         tvModel.needGetToken = false
                         tvModel.tokenYSPRetryTimes = 0
                         val cookie =
@@ -594,7 +556,7 @@ object Request {
 
                 override fun onFailure(call: Call<Info>, t: Throwable) {
                     if (call.isCanceled) return
-                    Log.e(TAG, "info request error $t")
+                    Log.e(TAG, "info request error ${t.javaClass.simpleName}")
                     if (tvModel.tokenYSPRetryTimes < tvModel.tokenYSPRetryMaxTimes) {
                         tvModel.tokenYSPRetryTimes++
                         fetchVideo(tvModel)
@@ -623,9 +585,10 @@ object Request {
             callInfo = yspTokenService.getInfo("")
             callInfo?.enqueue(object : Callback<Info> {
                 override fun onResponse(call: Call<Info>, response: Response<Info>) {
+                    if (call.isCanceled) return
                     if (response.isSuccessful && response.body()?.data?.token != null) {
                         token = response.body()?.data?.token!!
-                        Log.i(TAG, "info success $token")
+                        Log.i(TAG, "info success ok")
                         tvModel.needGetToken = false
                         tvModel.tokenYSPRetryTimes = 0
                         val cookie =
@@ -656,7 +619,7 @@ object Request {
 
                 override fun onFailure(call: Call<Info>, t: Throwable) {
                     if (call.isCanceled) return
-                    Log.e(TAG, "info request error $t")
+                    Log.e(TAG, "info request error ${t.javaClass.simpleName}")
                     if (tvModel.tokenYSPRetryTimes < tvModel.tokenYSPRetryMaxTimes) {
                         tvModel.tokenYSPRetryTimes++
                         fetchVideo(tvModel)
@@ -691,9 +654,10 @@ object Request {
         callFAuth = fAuthService.getAuth(tokenFH, tvModel.getTV().pid, qa)
         callFAuth?.enqueue(object : Callback<FAuth> {
             override fun onResponse(call: Call<FAuth>, response: Response<FAuth>) {
+                if (call.isCanceled) return
                 if (response.isSuccessful && response.body()?.data?.live_url != null) {
                     val url = response.body()?.data?.live_url!!
-//                    Log.d(TAG, "$title url $url")
+//                    Log.d(TAG, "$title address ready")
                     tvModel.addVideoUrl(url)
                     tvModel.allReady()
                     tvModel.tokenFHRetryTimes = 0
@@ -712,7 +676,7 @@ object Request {
 
             override fun onFailure(call: Call<FAuth>, t: Throwable) {
                 if (call.isCanceled) return
-                Log.e(TAG, "auth request error $t")
+                Log.e(TAG, "auth request error ${t.javaClass.simpleName}")
                 if (tvModel.tokenFHRetryTimes < tvModel.tokenFHRetryMaxTimes) {
                     tvModel.tokenFHRetryTimes++
                     fetchFAuth(tvModel)
@@ -795,11 +759,11 @@ object Request {
                         }
                         if (!t.isNullOrEmpty()) {
                             token = t
-                            Log.i(TAG, "token success $token")
+                            Log.i(TAG, "token success ok")
                         }
                         if (!f.isNullOrEmpty()) {
                             tokenFH = f
-                            Log.i(TAG, "tokenFH success $tokenFH")
+                            Log.i(TAG, "tokenFH success ok")
                         }
                         if (c != null) {
                             Utils.setBetween(c * 1000L)
@@ -818,7 +782,7 @@ object Request {
                 }
 
                 override fun onFailure(call: Call<InfoV2>, t: Throwable) {
-                    Log.e(TAG, "token request error $t")
+                    Log.e(TAG, "token request error ${t.javaClass.simpleName}")
                     if (initRetryTimes < initRetryMaxTimes) {
                         initRetryTimes++
                         fetchInfoV2()

@@ -6,7 +6,7 @@
 
 ## 功能
 
-- 遥控器浏览频道、分组跳转、数字定位，确认后切台。
+- 遥控器浏览频道、分组跳转、数字定位，确认后切台。播放中轻按上下键立即换台，长按滚动台号，松开后播放目标频道。
 - 67 个内置频道，其中 64 个频道提供共 133 条备用线路。
 - 按设备、频道记住上次连续稳定播放 20 秒的备用地址，下次优先播放，失败后自动切换。
 - 支持选择源内可用的分辨率，显示当前备用线路序号。
@@ -50,6 +50,16 @@ adb install -r GQTV.apk
 调试包输出在 app/build/outputs/apk/debug/app-debug.apk。
 项目随附原生库预编译文件。设备测试使用本地测试视频与 HTTP HLS 服务，覆盖遥控器焦点、选台、分辨率、线路重试、线路记忆和频道迁移。
 播放与选线回归通过 JVM 测试 11 项、Android TV 模拟器测试 19 项。
+
+### 换台诊断
+
+用 `adb logcat -s TuneTiming Request` 查看换台事件。一次确认换台对应一个编号，地址就绪、首个媒体分片的加载、首帧、超时和播放错误均带有频道与尝试序号。首帧后的缓冲观察窗为 30 秒，提前换走会输出实际观察时长。
+
+`TuneBenchmark` 是可选的联网设备测试。安装调试 APK 与 androidTest APK 后，在空闲测试设备上执行以下命令。每个组合约 3 分钟，会切换频道，完成后恢复原选台和相应的线路记忆。将 round 从 0 跑到 5，每轮分别跑 old 与 new，奇数轮先跑 new。
+
+```sh
+adb -s SERIAL shell am instrument -w -e class com.lizongying.mytv.TuneBenchmark -e policy new -e round 0 com.lizongying.mytv.preview.test/androidx.test.runner.AndroidJUnitRunner
+```
 
 ## 上游与版权
 

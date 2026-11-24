@@ -68,7 +68,7 @@ class MainFragment : Fragment(R.layout.menu) {
             channel.change.observe(viewLifecycleOwner) { reason ->
                 if (index == current) {
                     Request.stopPlaybackRequests()
-                    host.selectChannel(channel, reason != "retry")
+                    host.selectChannel(channel, reason != "retry", reason == "init")
                     if (reason != "retry") channel.setErrInfo("")
                     when {
                         // Start from the last decoded backup, or the catalog for backup-only channels.
@@ -77,8 +77,10 @@ class MainFragment : Fragment(R.layout.menu) {
                                 channel.setErrInfo(getString(R.string.source_unavailable))
                             }
                         }
-                        channel.getTV().pid.isNotEmpty() -> requestPrimary(channel)
-                        else -> playIfReady(channel)
+                        else -> {
+                            host.playbackSettings().beginPrimary()
+                            if (channel.getTV().pid.isNotEmpty()) requestPrimary(channel) else playIfReady(channel)
+                        }
                     }
                     host.showInfoFragment(channel)
                 }
@@ -86,6 +88,7 @@ class MainFragment : Fragment(R.layout.menu) {
             channel.ready.observe(viewLifecycleOwner) { if (index == current) playIfReady(channel) }
             channel.errInfo.observe(viewLifecycleOwner) { message ->
                 if (index != current) return@observe
+                if (!message.isNullOrEmpty()) host.playbackSettings().sourceFailed()
                 if (!message.isNullOrEmpty() && host.tryBackup(channel)) {
                     Request.stopPlaybackRequests()
                 } else {
@@ -142,8 +145,11 @@ class MainFragment : Fragment(R.layout.menu) {
         }
     }
 
+    fun steppedPosition(from: Int?, delta: Int) =
+        ((from ?: current) + delta + channels.size) % channels.size
+
     fun step(delta: Int) {
-        if (channels.isNotEmpty()) play((current + delta + channels.size) % channels.size)
+        if (channels.isNotEmpty()) play(steppedPosition(null, delta))
     }
 
     private fun select(position: Int) {

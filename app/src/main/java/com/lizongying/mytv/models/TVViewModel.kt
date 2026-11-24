@@ -11,6 +11,8 @@ import java.util.TimeZone
 
 class TVViewModel(private var tv: TV) : ViewModel() {
 
+    internal var authRequests = 0
+    internal var tuneId = 0L
     var retryTimes = 0
     var retryMaxTimes = 8
     var authYSPRetryTimes = 0
@@ -63,6 +65,7 @@ class TVViewModel(private var tv: TV) : ViewModel() {
     }
 
     fun changed(from: String) {
+        authRequests = 0
         retryTimes = 0
         authYSPRetryTimes = 0
         tokenYSPRetryTimes = 0

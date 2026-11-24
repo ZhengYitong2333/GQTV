@@ -13,6 +13,9 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Timeline
+import androidx.media3.exoplayer.source.LoadEventInfo
+import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
@@ -25,7 +28,22 @@ import com.lizongying.mytv.requests.Request
 class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     private var binding: PlayerBinding? = null
     private var outputView: PlayerView? = null
+    private var timing: TuneTiming? = null
+    private var timedOut = false
     private val frameListener = object : AnalyticsListener {
+        private fun currentLoad(time: AnalyticsListener.EventTime, data: MediaLoadData): Boolean {
+            if (data.dataType != C.DATA_TYPE_MEDIA || time.windowIndex !in 0 until time.timeline.windowCount) return false
+            return time.timeline.getWindow(time.windowIndex, Timeline.Window()).mediaItem.mediaId == timing?.mediaId
+        }
+
+        override fun onLoadStarted(time: AnalyticsListener.EventTime, info: LoadEventInfo, data: MediaLoadData) {
+            if (currentLoad(time, data)) timing?.segment(info.loadTaskId, false)
+        }
+
+        override fun onLoadCompleted(time: AnalyticsListener.EventTime, info: LoadEventInfo, data: MediaLoadData) {
+            if (currentLoad(time, data)) timing?.segment(info.loadTaskId, true)
+        }
+
         override fun onRenderedFirstFrame(eventTime: AnalyticsListener.EventTime, output: Any, renderTimeMs: Long) {
             renderedOn(output)
         }
@@ -52,12 +70,15 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
             val engine = player ?: return
             val model = channel ?: return
             val now = SystemClock.elapsedRealtime()
+            timing?.buffering(engine.playWhenReady && engine.playbackState == Player.STATE_BUFFERING, now)
             when (health?.sample(now, engine.isPlaying, engine.currentPosition)) {
                 PlaybackHealth.Decision.STABLE -> {
                     failures = 0
                     SP.rememberBackup(model.getTV().pid, if (usingBackup) backupLines[backupLine] else null)
                 }
                 PlaybackHealth.Decision.SLOW -> {
+                    if (!timedOut) timing?.event(if (reportedFrame) "stall_limit" else "timeout")
+                    timedOut = true
                     forgetCurrentBackup()
                     if (!switchRoute(model)) {
                         // The last route may recover. Start a fresh observation window.
@@ -77,6 +98,7 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     }
 
     private fun startAttempt() {
+        timedOut = false
         reportedFrame = false
         health = PlaybackHealth(SystemClock.elapsedRealtime())
         scheduleMonitor()
@@ -107,7 +129,10 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
 
     private val retry = Runnable {
         startAttempt()
-        if (usingBackup) prepareMedia() else channel?.changed("retry")
+        if (usingBackup) {
+            timing?.attempt("backup-${backupLine + 1}")
+            prepareMedia()
+        } else channel?.changed("retry")
     }
 
     override fun onViewCreated(view: View, state: Bundle?) {
@@ -139,13 +164,20 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         engine.addAnalyticsListener(frameListener)
         engine.addListener(this)
         engine.playWhenReady = true
-        if (channel != null) startAttempt()
+        channel?.let { model ->
+            tuneStarted = SystemClock.elapsedRealtime()
+            timing = TuneTiming(model.getTV().alias.ifEmpty { model.getTV().title }, false).also { model.tuneId = it.id }
+            timing?.attempt(if (usingBackup) "backup-${backupLine + 1}" else "primary")
+            startAttempt()
+        }
         prepareMedia()
     }
 
-    fun select(model: TVViewModel, userTune: Boolean) {
+    fun select(model: TVViewModel, userTune: Boolean, cold: Boolean = false) {
         if (channel !== model || userTune) {
             view?.removeCallbacks(retry)
+            timing?.finish("retuned")
+            timing = TuneTiming(model.getTV().alias.ifEmpty { model.getTV().title }, cold).also { model.tuneId = it.id }
             tuneStarted = SystemClock.elapsedRealtime()
             recoveredLiveWindow = false
             startAttempt()
@@ -165,6 +197,10 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
             if (hadVideo) replaceOutput()
         }
     }
+
+    fun sourceFailed() { timing?.event("source_error") }
+
+    fun beginPrimary() { timing?.attempt("primary") }
 
     fun play(model: TVViewModel) {
         if (channel !== model || usingBackup) return
@@ -206,6 +242,7 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         startAttempt()
         failures = 0
         setVideoTrack(null)
+        timing?.attempt("backup-${next + 1}")
         media = MediaItem.Builder().setUri(backupLines[next]).setMimeType(MimeTypes.APPLICATION_M3U8).build()
         prepareMedia()
         return true
@@ -263,7 +300,9 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
 
     private fun prepareMedia() {
         val engine = player ?: return
-        val item = media ?: return
+        val item = media?.buildUpon()?.setMediaId(timing?.mediaId.orEmpty())?.build() ?: return
+        media = item
+        timing?.event("address")
         engine.volume = channel?.getTV()?.volume ?: 1f
         engine.setMediaItem(item)
         engine.prepare()
@@ -271,6 +310,7 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
 
     override fun onPlayerError(error: PlaybackException) {
         val model = channel ?: return
+        timing?.event("playback_error", "code=${error.errorCode}")
         health = null
         scheduleMonitor()
         if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
@@ -318,11 +358,13 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         if (reportedFrame) return
         reportedFrame = true
         health?.rendered()
+        timing?.frame(player?.videoSize?.width ?: 0, player?.videoSize?.height ?: 0)
         val route = backupPosition()?.let { (line, count) -> "备用 $line/$count" } ?: "主源"
         Log.i("PlaybackHealth", "${channel?.getTV()?.alias} $route 首帧 ${SystemClock.elapsedRealtime() - tuneStarted}ms")
     }
 
     override fun onPlaybackStateChanged(playbackState: Int) {
+        timing?.buffering(playbackState == Player.STATE_BUFFERING && player?.playWhenReady == true)
         health?.buffering(SystemClock.elapsedRealtime(), playbackState == Player.STATE_BUFFERING && player?.playWhenReady == true)
     }
 
@@ -350,6 +392,8 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     }
 
     override fun onStop() {
+        timing?.finish("stopped")
+        timing = null
         health = null
         view?.removeCallbacks(monitor)
         view?.removeCallbacks(retry)

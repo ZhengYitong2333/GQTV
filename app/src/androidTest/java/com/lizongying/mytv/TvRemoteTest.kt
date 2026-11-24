@@ -7,6 +7,7 @@ import com.lizongying.mytv.requests.Request
 import android.graphics.Bitmap
 import android.os.SystemClock
 import android.view.KeyEvent
+import android.view.View
 import android.widget.TextView
 import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.Lifecycle
@@ -453,6 +454,72 @@ class TvRemoteTest {
         }
     }
 
+    @Test fun authFailuresAreBoundedBeforeBackupPlayback() {
+        val original = Request.yspApiService
+        val count = java.util.concurrent.atomic.AtomicInteger()
+        var status = 401
+        val pending = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val idle = java.util.concurrent.CountDownLatch(1)
+        val client = okhttp3.OkHttpClient.Builder().addInterceptor { chain ->
+            count.incrementAndGet()
+            if (status == -1) throw java.net.SocketTimeoutException("fixture timeout")
+            if (status == -2) {
+                pending.countDown()
+                release.await(5, java.util.concurrent.TimeUnit.SECONDS)
+            }
+            okhttp3.Response.Builder().request(chain.request()).protocol(okhttp3.Protocol.HTTP_1_1)
+                .code(if (status == -2) 503 else status).message("fixture").body(okhttp3.ResponseBody.create(null, "")).build()
+        }.build()
+        LocalHls(instrumentation.context.assets).use { server ->
+            try {
+                scenario.onActivity { host ->
+                    Request.yspApiService = retrofit2.Retrofit.Builder().baseUrl("http://127.0.0.1/")
+                        .client(client).addConverterFactory(retrofit2.converter.gson.GsonConverterFactory.create())
+                        .build().create(com.lizongying.mytv.api.YSPApiService::class.java)
+                    browser(host).requestPrimary = { Request.fetchAuth(it, "") }
+                    testLines = listOf(server.healthy)
+                }
+                for ((code, expected) in listOf(401 to 1, 403 to 1, 503 to 2, 408 to 2, -1 to 2)) {
+                    scenario.onActivity { host ->
+                        status = code
+                        count.set(0)
+                        host.play(documentaryIndex)
+                    }
+                    awaitUi("HTTP $code reaches backup") { it.playbackSettings().isUsingBackup() &&
+                        it.findViewById<View>(R.id.tune_cover).visibility == View.GONE }
+                    assertEquals(expected, count.get())
+                }
+                scenario.onActivity { host ->
+                    testLines = emptyList()
+                    status = 403
+                    count.set(0)
+                    host.play(catalog.indexOfFirst { it.alias.isEmpty() && it.pid.isNotEmpty() })
+                }
+                awaitUi("primary-only recovery keeps original retries") {
+                    count.get() == 9 && !browser(it).currentChannel!!.errInfo.value.isNullOrEmpty()
+                }
+                scenario.onActivity { host ->
+                    status = -2
+                    count.set(0)
+                    host.play(documentaryIndex)
+                }
+                assertTrue(pending.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                client.dispatcher().setIdleCallback { idle.countDown() }
+                scenario.onActivity { host ->
+                    browser(host).requestPrimary = host::play
+                    host.play(documentaryIndex + 1)
+                }
+                release.countDown()
+                assertTrue(idle.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                instrumentation.waitForIdleSync()
+                assertEquals(1, count.get())
+            } finally {
+                scenario.onActivity { Request.yspApiService = original }
+            }
+        }
+    }
+
     @Test fun heldChannelKeyLimitsRetunesButFreshTapsAreImmediate() {
         scenario.onActivity { host ->
             val code = KeyEvent.KEYCODE_CHANNEL_DOWN
@@ -465,8 +532,12 @@ class TvRemoteTest {
             down(50, 1)
             assertEquals(documentaryIndex + 1, SP.itemPosition)
             down(350, 2)
-            down(360, 0)
+            down(650, 3)
+            assertEquals(documentaryIndex + 1, SP.itemPosition)
+            host.onKeyUp(code, KeyEvent(start, start + 660, KeyEvent.ACTION_UP, code, 0))
             assertEquals(documentaryIndex + 3, SP.itemPosition)
+            down(675, 0)
+            assertEquals(documentaryIndex + 4, SP.itemPosition)
         }
     }
 
@@ -503,7 +574,10 @@ class TvRemoteTest {
         try {
             // Sample the composited picture away from the channel/time overlays.
             for (x in 3..7) for (y in 3..7) {
-                assertEquals(android.graphics.Color.BLACK, frame.getPixel(frame.width * x / 10, frame.height * y / 10))
+                val pixel = frame.getPixel(frame.width * x / 10, frame.height * y / 10)
+                // The emulator compositor can quantize opaque black to RGB(1,1,1).
+                assertTrue(android.graphics.Color.red(pixel) <= 1 && android.graphics.Color.green(pixel) <= 1 &&
+                    android.graphics.Color.blue(pixel) <= 1)
             }
         } finally {
             frame.recycle()
