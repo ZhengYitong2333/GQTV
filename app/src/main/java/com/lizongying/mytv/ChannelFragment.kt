@@ -38,7 +38,7 @@ class ChannelFragment : Fragment(R.layout.channel) {
         digits += digit
         ui.content.text = digits
         ui.root.isVisible = true
-        if (digits.length == 2) tune.run() else ui.root.postDelayed(tune, 5_000)
+        if (digits.length == 2) tune.run() else ui.root.postDelayed(tune, ChannelJump.SECOND_DIGIT_TIMEOUT_MS)
     }
 
     fun clear() {

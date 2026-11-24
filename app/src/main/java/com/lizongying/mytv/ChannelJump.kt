@@ -9,6 +9,8 @@ package com.lizongying.mytv
  */
 internal class ChannelJump(private val resolve: (Int) -> Int?) {
 
+    companion object { const val SECOND_DIGIT_TIMEOUT_MS = 1_200L }
+
     var typed: String = ""
         private set
 

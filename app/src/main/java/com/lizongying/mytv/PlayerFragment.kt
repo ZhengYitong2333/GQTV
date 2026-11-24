@@ -133,7 +133,7 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
             selectedHeight = null
             failures = 0
             setVideoTrack(null)
-            player?.stop()
+            // Clearing the playlist also detaches the old source and closes the PlayerView shutter.
             player?.clearMediaItems()
         }
     }

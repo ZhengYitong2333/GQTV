@@ -364,6 +364,8 @@ class TvRemoteTest {
         key(KeyEvent.KEYCODE_0)
         key(KeyEvent.KEYCODE_2)
         awaitUi("two-digit tune") { SP.itemPosition == 1 }
+        key(KeyEvent.KEYCODE_4)
+        awaitUi("single-digit tune", 2_500) { SP.itemPosition == 3 }
     }
 
     @Test fun migratesEveryLegacyPositionAndRestoresByPid() {
@@ -448,6 +450,49 @@ class TvRemoteTest {
                     it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true
             }
             assertNull(SP.lastBackup(pid))
+        }
+    }
+
+    @Test fun heldChannelKeyLimitsRetunesButFreshTapsAreImmediate() {
+        scenario.onActivity { host ->
+            val code = KeyEvent.KEYCODE_CHANNEL_DOWN
+            val start = SystemClock.uptimeMillis()
+            fun down(offset: Long, repeat: Int) {
+                host.onKeyDown(code, KeyEvent(if (repeat == 0) start + offset else start,
+                    start + offset, KeyEvent.ACTION_DOWN, code, repeat))
+            }
+            down(0, 0)
+            down(50, 1)
+            assertEquals(documentaryIndex + 1, SP.itemPosition)
+            down(350, 2)
+            down(360, 0)
+            assertEquals(documentaryIndex + 3, SP.itemPosition)
+        }
+    }
+
+    @Test fun pendingRetuneCoversOldVideoUntilNewFrame() {
+        scenario.onActivity { host ->
+            testLines = emptyList()
+            browser(host).requestPrimary = {}
+            host.play(documentaryIndex + 1)
+        }
+        val shutterId = androidx.media3.ui.R.id.exo_shutter
+        awaitUi("old surface covered") {
+            it.findViewById<android.view.View>(shutterId).visibility == android.view.View.VISIBLE
+        }
+        val frame = instrumentation.uiAutomation.takeScreenshot()
+        try {
+            // Sample the composited picture away from the channel/time overlays.
+            for (x in 3..7) for (y in 3..7) {
+                assertEquals(android.graphics.Color.BLACK, frame.getPixel(frame.width * x / 10, frame.height * y / 10))
+            }
+        } finally {
+            frame.recycle()
+        }
+        scenario.onActivity { it.play(browser(it).currentChannel!!) }
+        awaitUi("new video revealed") {
+            it.findViewById<android.view.View>(shutterId).visibility != android.view.View.VISIBLE &&
+                it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true
         }
     }
 

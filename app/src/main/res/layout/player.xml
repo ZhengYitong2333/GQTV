@@ -11,7 +11,8 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:layout_gravity="center"
-        app:shutter_background_color="@android:color/transparent"
+        app:shutter_background_color="@android:color/black"
+        app:keep_content_on_player_reset="false"
         app:resize_mode="fit"
         app:use_controller="false" />
 </FrameLayout>

@@ -32,6 +32,8 @@ class MainActivity : FragmentActivity(), Request.RequestListener, OnSharedPrefer
     private val ready = mutableSetOf<String>()
     private var playbackStarted = false
     private var resumed = false
+    private var lastChannelStep = 0L
+    private var requestedErrorVisible: Boolean? = null
     private var lastBack = -2_000L
     private val hideBrowser = Runnable { closeBrowser() }
 
@@ -107,7 +109,10 @@ class MainActivity : FragmentActivity(), Request.RequestListener, OnSharedPrefer
 
     fun setPlaybackError(message: String) {
         if (supportFragmentManager.isStateSaved) return
-        errors.show(message)
+        val visible = message.isNotEmpty()
+        if (visible) errors.show(message)
+        if (visible == (requestedErrorVisible ?: !errors.isHidden)) return
+        requestedErrorVisible = visible
         val tx = supportFragmentManager.beginTransaction()
         if (message.isEmpty()) tx.hide(errors).show(player) else tx.hide(player).show(errors)
         tx.commit()
@@ -196,10 +201,15 @@ class MainActivity : FragmentActivity(), Request.RequestListener, OnSharedPrefer
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
             KeyEvent.KEYCODE_DPAD_LEFT -> if (onRelease) openBrowser()
             KeyEvent.KEYCODE_DPAD_RIGHT -> if (onRelease) openSettings()
-            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP ->
-                if (event.action == KeyEvent.ACTION_DOWN) browser.step(if (SP.channelReversal) 1 else -1)
-            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN ->
-                if (event.action == KeyEvent.ACTION_DOWN) browser.step(if (SP.channelReversal) -1 else 1)
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP,
+            KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_CHANNEL_DOWN -> {
+                if (event.action == KeyEvent.ACTION_DOWN &&
+                    (event.repeatCount == 0 || event.eventTime - lastChannelStep >= 300)) {
+                    lastChannelStep = event.eventTime
+                    val up = code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_CHANNEL_UP
+                    browser.step(if (up == SP.channelReversal) 1 else -1)
+                }
+            }
             in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 ->
                 if (onRelease && SP.channelNum) numbers.show((code - KeyEvent.KEYCODE_0).toString())
             else -> return false

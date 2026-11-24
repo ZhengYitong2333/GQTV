@@ -35,6 +35,7 @@ class MainFragment : Fragment(R.layout.menu) {
     internal val currentChannel: TVViewModel? get() = channels.getOrNull(current)
     private var grid: Boolean? = null
     private var cards: CardAdapter? = null
+    private val guideAfterTune = Runnable { requestGuide(current) }
     private val guideRequests = mutableMapOf<Int, Long>()
     private val timeFormat = SimpleDateFormat("HH:mm", Locale.getDefault())
     // Group name -> index of its first channel in `channels`. Same iteration
@@ -111,8 +112,8 @@ class MainFragment : Fragment(R.layout.menu) {
 
     fun fragmentReady() {
         currentChannel?.let {
-            requestGuide(current)
             it.changed("init")
+            scheduleGuideAfterTune()
         }
     }
 
@@ -130,8 +131,15 @@ class MainFragment : Fragment(R.layout.menu) {
             cards?.notifyItemChanged(current)
             syncGroups()
         }
-        requestGuide(current)
         channels[current].changed("tune")
+        scheduleGuideAfterTune()
+    }
+
+    private fun scheduleGuideAfterTune() {
+        binding?.root?.run {
+            removeCallbacks(guideAfterTune)
+            postDelayed(guideAfterTune, 250)
+        }
     }
 
     fun step(delta: Int) {
@@ -295,7 +303,7 @@ class MainFragment : Fragment(R.layout.menu) {
             text = typed.typed
             isVisible = true
             // Two digits commit at once; one waits for the second.
-            if (complete) postDelayed(commitTyped, 0) else postDelayed(commitTyped, 1_200)
+            if (complete) postDelayed(commitTyped, 0) else postDelayed(commitTyped, ChannelJump.SECOND_DIGIT_TIMEOUT_MS)
         }
     }
 
@@ -378,6 +386,7 @@ class MainFragment : Fragment(R.layout.menu) {
     }
 
     override fun onDestroyView() {
+        binding?.root?.removeCallbacks(guideAfterTune)
         binding?.items?.adapter = null
         binding?.jump?.removeCallbacks(commitTyped)
         chips = null
