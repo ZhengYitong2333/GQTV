@@ -430,6 +430,82 @@ class TvRemoteTest {
         }
     }
 
+    @Test fun firstFrameTimeoutAndSilentRebufferAdvanceWithoutRememberingSlowLines() {
+        LocalHls(instrumentation.context.assets).use { server ->
+            val pid = catalog[documentaryIndex].pid
+            scenario.onActivity {
+                SP.rememberBackup(pid, server.silent)
+                testLines = listOf(server.silent, server.stalled, server.healthy)
+                it.play(documentaryIndex)
+            }
+            awaitUi("silent route expires and next route renders", 18_000) {
+                it.playbackSettings().backupPosition() == (2 to 3) &&
+                    it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true
+            }
+            assertNull(SP.lastBackup(pid))
+            awaitUi("post-frame buffering switches to healthy route", 25_000) {
+                it.playbackSettings().backupPosition() == (3 to 3) &&
+                    it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true
+            }
+            assertNull(SP.lastBackup(pid))
+        }
+    }
+
+    @Test fun soleSlowPrimaryCanFinishLoadingAfterTheDeadline() {
+        scenario.onActivity { host ->
+            testLines = emptyList()
+            browser(host).requestPrimary = { channel ->
+                host.window.decorView.postDelayed({ host.play(channel) }, 9_000)
+            }
+            host.play(documentaryIndex)
+        }
+        awaitUi("only route recovers without being restarted", 14_000) {
+            it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true &&
+                it.playbackSettings().backupPosition() == null
+        }
+    }
+
+    @Test fun retuningBeforeTimeoutLeavesNewChannelPlaying() {
+        LocalHls(instrumentation.context.assets).use { server ->
+            scenario.onActivity { host ->
+                testLines = listOf(server.silent)
+                SP.rememberBackup(catalog[documentaryIndex].pid, server.silent)
+                host.play(documentaryIndex)
+                assertEquals(1 to 1, host.playbackSettings().backupPosition())
+                host.play(documentaryIndex + 1)
+            }
+            SystemClock.sleep(9_000)
+            scenario.onActivity { host ->
+                assertEquals(catalog[documentaryIndex + 1].pid, browser(host).currentChannel!!.getTV().pid)
+                assertNull(host.playbackSettings().backupPosition())
+                assertTrue(host.findViewById<PlayerView>(R.id.player_view).player!!.isPlaying)
+            }
+        }
+    }
+
+    @Test fun expiredLiveWindowGetsOneRecoveryBeforeAdvancing() {
+        LocalHls(instrumentation.context.assets).use { server ->
+            scenario.onActivity {
+                testLines = listOf(server.healthy, server.stalled)
+                SP.rememberBackup(catalog[documentaryIndex].pid, server.healthy)
+                it.play(documentaryIndex)
+            }
+            awaitUi("healthy route playing") {
+                it.playbackSettings().backupPosition() == (1 to 2) &&
+                    it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true
+            }
+            scenario.onActivity {
+                val error = androidx.media3.common.PlaybackException("expired", null,
+                    androidx.media3.common.PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW)
+                val player = it.playbackSettings()
+                player.onPlayerError(error)
+                assertEquals(1 to 2, player.backupPosition())
+                player.onPlayerError(error)
+                assertEquals(2 to 2, player.backupPosition())
+            }
+        }
+    }
+
     @Test fun failedRememberedLineFallsBackAndAnObsoleteLineIsIgnored() {
         LocalHls(instrumentation.context.assets).use { server ->
             val pid = catalog[documentaryIndex].pid

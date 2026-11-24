@@ -1,6 +1,8 @@
 package com.lizongying.mytv
 
 import android.os.Bundle
+import android.os.SystemClock
+import android.util.Log
 import android.view.View
 import androidx.annotation.OptIn
 import androidx.fragment.app.Fragment
@@ -15,6 +17,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import com.lizongying.mytv.databinding.PlayerBinding
 import com.lizongying.mytv.models.TVViewModel
+import com.lizongying.mytv.requests.Request
 
 class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     private var binding: PlayerBinding? = null
@@ -30,7 +33,70 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     private var retriedLine = false
     private var selectedHeight: Int? = null
     private var failures = 0
+    private var health: PlaybackHealth? = null
+    private var tuneStarted = 0L
+    private var reportedFrame = false
+    private var recoveredLiveWindow = false
+    private val monitor = object : Runnable {
+        override fun run() {
+            val engine = player ?: return
+            val model = channel ?: return
+            val now = SystemClock.elapsedRealtime()
+            when (health?.sample(now, engine.isPlaying, engine.currentPosition)) {
+                PlaybackHealth.Decision.STABLE -> {
+                    failures = 0
+                    SP.rememberBackup(model.getTV().pid, if (usingBackup) backupLines[backupLine] else null)
+                }
+                PlaybackHealth.Decision.SLOW -> {
+                    forgetCurrentBackup()
+                    if (!switchRoute(model)) {
+                        // The last route may recover. Start a fresh observation window.
+                        health = PlaybackHealth(now).also { if (reportedFrame) it.rendered() }
+                        onPlaybackStateChanged(engine.playbackState)
+                    }
+                }
+                else -> Unit
+            }
+            scheduleMonitor()
+        }
+    }
+
+    private fun scheduleMonitor() {
+        view?.removeCallbacks(monitor)
+        if (health != null && player != null) view?.postDelayed(monitor, 500)
+    }
+
+    private fun startAttempt() {
+        reportedFrame = false
+        health = PlaybackHealth(SystemClock.elapsedRealtime())
+        scheduleMonitor()
+    }
+
+    private fun forgetCurrentBackup() {
+        val pid = channel?.getTV()?.pid ?: return
+        if (usingBackup && SP.lastBackup(pid) == backupLines[backupLine]) SP.rememberBackup(pid, null)
+    }
+
+    private fun switchRoute(model: TVViewModel): Boolean {
+        if (!usingBackup) {
+            if (!tryBackup(model)) return false
+            Request.stopPlaybackRequests()
+            return true
+        }
+        if (advanceBackup()) return true
+        if (!primaryStillAvailable) return false
+        primaryStillAvailable = false
+        usingBackup = false
+        recoveredLiveWindow = false
+        media = null
+        player?.stop()
+        startAttempt()
+        model.changed("retry")
+        return true
+    }
+
     private val retry = Runnable {
+        startAttempt()
         if (usingBackup) prepareMedia() else channel?.changed("retry")
     }
 
@@ -46,12 +112,16 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         binding?.playerView?.player = engine
         engine.addListener(this)
         engine.playWhenReady = true
+        if (channel != null) startAttempt()
         prepareMedia()
     }
 
     fun select(model: TVViewModel, userTune: Boolean) {
         if (channel !== model || userTune) {
             view?.removeCallbacks(retry)
+            tuneStarted = SystemClock.elapsedRealtime()
+            recoveredLiveWindow = false
+            startAttempt()
             channel = model
             media = null
             usingBackup = false
@@ -79,7 +149,9 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     internal fun hasRememberedBackup(model: TVViewModel): Boolean {
         val tv = model.getTV()
         val remembered = SP.lastBackup(tv.pid) ?: return false
-        return remembered in lookupBackup(tv.alias).orEmpty()
+        if (remembered in lookupBackup(tv.alias).orEmpty()) return true
+        SP.rememberBackup(tv.pid, null)
+        return false
     }
 
     fun tryBackup(model: TVViewModel, beforePrimary: Boolean = false): Boolean {
@@ -102,6 +174,8 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         usingBackup = true
         backupLine = next
         retriedLine = false
+        recoveredLiveWindow = false
+        startAttempt()
         failures = 0
         setVideoTrack(null)
         media = MediaItem.Builder().setUri(backupLines[next]).setMimeType(MimeTypes.APPLICATION_M3U8).build()
@@ -169,6 +243,20 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
 
     override fun onPlayerError(error: PlaybackException) {
         val model = channel ?: return
+        health = null
+        scheduleMonitor()
+        if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
+            if (!recoveredLiveWindow) {
+                recoveredLiveWindow = true
+                startAttempt()
+                player?.seekToDefaultPosition()
+                player?.prepare()
+                return
+            }
+            forgetCurrentBackup()
+            if (!switchRoute(model)) model.setErrInfo("直播信号暂时无法恢复")
+            return
+        }
         if (usingBackup) {
             // One retry per line for a transient blip, then move to the next
             // verified line. The error overlay only appears once the list ends,
@@ -178,16 +266,8 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
                 view?.removeCallbacks(retry)
                 view?.postDelayed(retry, 1_000L)
             } else {
-                val pid = model.getTV().pid
-                if (SP.lastBackup(pid) == backupLines[backupLine]) SP.rememberBackup(pid, null)
-                if (!advanceBackup()) {
-                    if (primaryStillAvailable) {
-                        primaryStillAvailable = false
-                        usingBackup = false
-                        media = null
-                        model.changed("retry")
-                    } else model.setErrInfo("播放错误")
-                }
+                forgetCurrentBackup()
+                if (!switchRoute(model)) model.setErrInfo("播放错误")
             }
             return
         }
@@ -204,13 +284,28 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     override fun onRenderedFirstFrame() {
         val item = media ?: return
         if (player?.currentMediaItem != item) return
-        val pid = channel?.getTV()?.pid ?: return
-        SP.rememberBackup(pid, if (usingBackup) backupLines[backupLine] else null)
+        if (reportedFrame) return
+        reportedFrame = true
+        health?.rendered()
+        Log.i("PlaybackHealth", "${channel?.getTV()?.alias} 首帧 ${SystemClock.elapsedRealtime() - tuneStarted}ms")
+    }
+
+    override fun onPlaybackStateChanged(playbackState: Int) {
+        health?.buffering(SystemClock.elapsedRealtime(), playbackState == Player.STATE_BUFFERING && player?.playWhenReady == true)
+    }
+
+    override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+        if (!playWhenReady) health = null
+        else if (health == null && media != null) {
+            health = PlaybackHealth(SystemClock.elapsedRealtime())
+            if (reportedFrame) health?.rendered()
+            player?.let { onPlaybackStateChanged(it.playbackState) }
+        }
+        scheduleMonitor()
     }
 
     override fun onIsPlayingChanged(isPlaying: Boolean) {
         if (isPlaying) {
-            failures = 0
             view?.removeCallbacks(retry)
             channel?.setErrInfo("")
         }
@@ -223,6 +318,8 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     }
 
     override fun onStop() {
+        health = null
+        view?.removeCallbacks(monitor)
         view?.removeCallbacks(retry)
         binding?.playerView?.player = null
         player?.removeListener(this)

@@ -21,6 +21,8 @@ internal class LocalHls(assets: AssetManager) : Closeable {
     val healthyLoads = AtomicInteger()
     val breakSegment = Semaphore(0)
     private val base = "http://127.0.0.1:" + socket.localPort
+    val stalled = "$base/stalled.php"
+    val silent = "$base/silent.php"
     val broken = "$base/broken.php"
     val healthy = "$base/healthy.php"
     val invalid = "$base/invalid.php"
@@ -28,6 +30,7 @@ internal class LocalHls(assets: AssetManager) : Closeable {
     private fun playlist(broken: Boolean) = buildString {
         append("#EXTM3U\n#EXT-X-TARGETDURATION:8\n#EXTINF:8,\nclip.ts\n")
         if (broken) append("#EXTINF:4,\nbad.ts\n")
+        else repeat(3) { append("#EXT-X-DISCONTINUITY\n#EXTINF:8,\nclip.ts\n") }
         append("#EXT-X-ENDLIST\n")
     }.toByteArray()
 
@@ -43,6 +46,9 @@ internal class LocalHls(assets: AssetManager) : Closeable {
         val path = reader.readLine()?.split(' ')?.getOrNull(1) ?: return
         while (!reader.readLine().isNullOrEmpty()) Unit
         val body = when (path) {
+            "/silent.php" -> { Thread.sleep(12_000); playlist(false) }
+            "/stalled.php" -> playlist(true).decodeToString().replace("bad.ts", "stall.ts").toByteArray()
+            "/stall.ts" -> { Thread.sleep(30_000); clip }
             "/broken.php" -> {
                 firstLoads.incrementAndGet()
                 Thread.sleep(1500)

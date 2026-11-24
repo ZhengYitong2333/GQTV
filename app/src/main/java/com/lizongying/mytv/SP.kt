@@ -38,7 +38,7 @@ object SP {
      */
     fun init(context: Context) {
         sp = context.getSharedPreferences(SP_FILE_NAME, Context.MODE_PRIVATE)
-        playbackRoutes = context.getSharedPreferences("playback_routes", Context.MODE_PRIVATE)
+        playbackRoutes = context.getSharedPreferences("stable_playback_routes", Context.MODE_PRIVATE)
     }
 
     fun setOnSharedPreferenceChangeListener(listener: OnSharedPreferenceChangeListener) {
