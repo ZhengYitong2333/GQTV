@@ -9,9 +9,9 @@ package com.lizongying.mytv
 // hls/8 is CCTV-7, hls/9 is CCTV-8, hls/18 is CCTV-17, and 221.7.175.154
 // tsfile 1018_1 is CCTV-5+ rather than CCTV-5.
 //
-// Every entry below measured 1920x1080 unless it ends with "(720p)".
-// Order matters: lines are tried top to bottom, so the best measured line comes
-// first and the hosts are deliberately mixed for redundancy.
+// Default order measured on the home LAN, 2026-11-24: successful first-frame
+// decodes over two runs, then median startup time in half-second bands.
+// Prefer HD over marked 720p within a band; retain failed lines as fallbacks.
 //
 // Channels with no own source (the pay channels above all) are keyed by alias
 // exactly like the rest, so a lookup keyed by alias is all the player needs.
@@ -23,112 +23,112 @@ internal fun backupSource(alias: String): List<String>? =
 internal val backupStreams: Map<String, List<String>> = mapOf(
     // ---- 央视 --------------------------------------------------------------
     "CCTV1" to listOf(
-        "http://1.24.39.180:9003/hls/1/index.m3u8",
-        "http://38.75.136.137:98/gslb/dsdqpub/cctv1hd.m3u8?auth=testpub",
-        "http://222.223.41.27:8888/hls/1/index.m3u8",
         "http://221.7.175.154:8445/tsfile/live/1000_1.m3u8?key=txiptv&playlive=1&authid=0",
+        "http://222.223.41.27:8888/hls/1/index.m3u8",
         "http://74.91.26.218:82/live/cctv1hd.m3u8", // 720p
+        "http://38.75.136.137:98/gslb/dsdqpub/cctv1hd.m3u8?auth=testpub",
+        "http://1.24.39.180:9003/hls/1/index.m3u8",
     ),
     "CCTV2" to listOf(
-        "http://1.24.39.180:9003/hls/2/index.m3u8",
         "http://222.223.41.27:8888/hls/2/index.m3u8",
         "http://74.91.26.218:82/live/cctv2hd.m3u8", // 720p
+        "http://1.24.39.180:9003/hls/2/index.m3u8",
     ),
     "CCTV3" to listOf(
-        "http://1.24.39.180:9003/hls/3/index.m3u8",
-        "http://38.75.136.137:98/gslb/dsdqpub/cctv3hd.m3u8?auth=testpub",
         "http://222.223.41.27:8888/hls/3/index.m3u8",
+        "http://38.75.136.137:98/gslb/dsdqpub/cctv3hd.m3u8?auth=testpub",
         "http://74.91.26.218:82/live/cctv3hd.m3u8", // 720p
+        "http://1.24.39.180:9003/hls/3/index.m3u8",
     ),
     "CCTV4" to listOf(
-        "http://1.24.39.180:9003/hls/4/index.m3u8",
-        "http://38.75.136.137:98/gslb/dsdqpub/cctv4hd.m3u8?auth=testpub",
         "http://222.223.41.27:8888/hls/4/index.m3u8",
+        "http://38.75.136.137:98/gslb/dsdqpub/cctv4hd.m3u8?auth=testpub",
+        "http://1.24.39.180:9003/hls/4/index.m3u8",
     ),
     "CCTV5" to listOf(
-        "http://1.24.39.180:9003/hls/5/index.m3u8",
-        "http://38.75.136.137:98/gslb/dsdqpub/cctv5hd.m3u8?auth=testpub",
         "http://222.223.41.27:8888/hls/5/index.m3u8",
+        "http://38.75.136.137:98/gslb/dsdqpub/cctv5hd.m3u8?auth=testpub",
+        "http://1.24.39.180:9003/hls/5/index.m3u8",
     ),
     "CCTV5+" to listOf(
-        "http://38.75.136.137:98/gslb/dsdqpub/cctv5p.m3u8?auth=testpub",
-        "http://183.129.255.66:8480/hls/6/index.m3u8",
         "http://221.7.175.154:8445/tsfile/live/1018_1.m3u8?key=txiptv&playlive=1&authid=0",
         "http://59.39.89.130:60901/tsfile/live/0016_1.m3u8?key=txiptv&playlive=1&authid=0",
+        "http://38.75.136.137:98/gslb/dsdqpub/cctv5p.m3u8?auth=testpub",
+        "http://183.129.255.66:8480/hls/6/index.m3u8",
     ),
     "CCTV6" to listOf(
-        "http://1.24.39.180:9003/hls/6/index.m3u8",
-        "http://38.75.136.137:98/gslb/dsdqpub/cctv6hd.m3u8?auth=testpub",
         "http://222.223.41.27:8888/hls/6/index.m3u8",
         "http://74.91.26.218:82/live/cctv6hd.m3u8", // 720p
+        "http://38.75.136.137:98/gslb/dsdqpub/cctv6hd.m3u8?auth=testpub",
+        "http://1.24.39.180:9003/hls/6/index.m3u8",
     ),
     "CCTV7" to listOf(
-        "http://1.24.39.180:9003/hls/7/index.m3u8",
-        "http://38.75.136.137:98/gslb/dsdqpub/cctv7hd.m3u8?auth=testpub",
         "http://222.223.41.27:8888/hls/7/index.m3u8",
-        "http://183.129.255.66:8480/hls/8/index.m3u8",
+        "http://38.75.136.137:98/gslb/dsdqpub/cctv7hd.m3u8?auth=testpub",
         "http://74.91.26.218:82/live/cctv7hd.m3u8", // 720p
+        "http://183.129.255.66:8480/hls/8/index.m3u8",
+        "http://1.24.39.180:9003/hls/7/index.m3u8",
     ),
     "CCTV8" to listOf(
-        "http://1.24.39.180:9003/hls/8/index.m3u8",
-        "http://38.75.136.137:98/gslb/dsdqpub/cctv8hd.m3u8?auth=testpub",
         "http://222.223.41.27:8888/hls/8/index.m3u8",
-        "http://183.129.255.66:8480/hls/9/index.m3u8",
         "http://74.91.26.218:82/live/cctv8hd.m3u8", // 720p
+        "http://183.129.255.66:8480/hls/9/index.m3u8",
+        "http://38.75.136.137:98/gslb/dsdqpub/cctv8hd.m3u8?auth=testpub",
+        "http://1.24.39.180:9003/hls/8/index.m3u8",
     ),
     "CCTV9" to listOf(
-        "http://1.24.39.180:9003/hls/9/index.m3u8",
-        "http://38.75.136.137:98/gslb/dsdqpub/cctv9hd.m3u8?auth=testpub",
-        "http://222.223.41.27:8888/hls/9/index.m3u8",
         "http://221.7.175.154:8445/tsfile/live/1007_1.m3u8?key=txiptv&playlive=1&authid=0",
+        "http://222.223.41.27:8888/hls/9/index.m3u8",
+        "http://38.75.136.137:98/gslb/dsdqpub/cctv9hd.m3u8?auth=testpub",
         "http://74.91.26.218:82/live/cctv9hd.m3u8", // 720p
+        "http://1.24.39.180:9003/hls/9/index.m3u8",
     ),
     "CCTV10" to listOf(
-        "http://1.24.39.180:9003/hls/10/index.m3u8",
-        "http://38.75.136.137:98/gslb/dsdqpub/cctv10hd.m3u8?auth=testpub",
         "http://222.223.41.27:8888/hls/10/index.m3u8",
         "http://74.91.26.218:82/live/cctv10hd.m3u8", // 720p
+        "http://38.75.136.137:98/gslb/dsdqpub/cctv10hd.m3u8?auth=testpub",
+        "http://1.24.39.180:9003/hls/10/index.m3u8",
     ),
     "CCTV11" to listOf(
-        "http://1.24.39.180:9003/hls/11/index.m3u8",
-        "http://38.75.136.137:98/gslb/dsdqpub/cctv11hd.m3u8?auth=testpub",
         "http://222.223.41.27:8888/hls/11/index.m3u8",
+        "http://38.75.136.137:98/gslb/dsdqpub/cctv11hd.m3u8?auth=testpub",
         "http://74.91.26.218:82/live/cctv11hd.m3u8", // 720p
+        "http://1.24.39.180:9003/hls/11/index.m3u8",
     ),
     "CCTV12" to listOf(
-        "http://1.24.39.180:9003/hls/12/index.m3u8",
-        "http://38.75.136.137:98/gslb/dsdqpub/cctv12hd.m3u8?auth=testpub",
-        "http://222.223.41.27:8888/hls/12/index.m3u8",
         "http://221.7.175.154:8445/tsfile/live/1010_1.m3u8?key=txiptv&playlive=1&authid=0",
+        "http://222.223.41.27:8888/hls/12/index.m3u8",
         "http://74.91.26.218:82/live/cctv12hd.m3u8", // 720p
+        "http://38.75.136.137:98/gslb/dsdqpub/cctv12hd.m3u8?auth=testpub",
+        "http://1.24.39.180:9003/hls/12/index.m3u8",
     ),
     "CCTV13" to listOf(
-        "http://1.24.39.180:9003/hls/13/index.m3u8",
-        "http://38.75.136.137:98/gslb/dsdqpub/cctv13hd.m3u8?auth=testpub",
         "http://222.223.41.27:8888/hls/13/index.m3u8",
         "http://74.91.26.218:82/live/cctv13hd.m3u8", // 720p
+        "http://38.75.136.137:98/gslb/dsdqpub/cctv13hd.m3u8?auth=testpub",
+        "http://1.24.39.180:9003/hls/13/index.m3u8",
     ),
     "CCTV14" to listOf(
-        "http://1.24.39.180:9003/hls/14/index.m3u8",
         "http://222.223.41.27:8888/hls/14/index.m3u8",
         "http://74.91.26.218:82/live/cctv14hd.m3u8", // 720p
+        "http://1.24.39.180:9003/hls/14/index.m3u8",
     ),
     "CCTV15" to listOf(
-        "http://1.24.39.180:9003/hls/15/index.m3u8",
         "http://222.223.41.27:8888/hls/15/index.m3u8",
         "http://74.91.26.218:82/live/cctv15hd.m3u8", // 720p
+        "http://1.24.39.180:9003/hls/15/index.m3u8",
     ),
     "CCTV16-HD" to listOf(
-        "http://1.24.39.180:9003/hls/60/index.m3u8",
-        "http://38.75.136.137:98/gslb/dsdqpub/cctv16hd.m3u8?auth=testpub",
         "http://183.129.255.66:8480/hls/17/index.m3u8",
         "http://112.27.5.218:9901/tsfile/live/faacts/1001_1.m3u8?key=txiptv&playlive=1&authid=0",
+        "http://38.75.136.137:98/gslb/dsdqpub/cctv16hd.m3u8?auth=testpub",
+        "http://1.24.39.180:9003/hls/60/index.m3u8",
     ),
     "CCTV17" to listOf(
         "http://221.7.175.154:8445/tsfile/live/1009_1.m3u8?key=txiptv&playlive=1&authid=0",
         "http://218.104.239.114:9901/tsfile/live/0019_2.m3u8?key=txiptv&playlive=1&authid=0",
-        "http://183.129.255.66:8480/hls/18/index.m3u8",
         "http://38.75.136.137:98/gslb/dsdqpub/cctv17hd.m3u8?auth=testpub", // 720p
+        "http://183.129.255.66:8480/hls/18/index.m3u8",
     ),
     "CCTV4K" to listOf(
         "http://38.75.136.137:98/gslb/dsdqpub/cctv4k.m3u8?auth=testpub",
@@ -183,20 +183,20 @@ internal val backupStreams: Map<String, List<String>> = mapOf(
     // ---- 地方卫视 ----------------------------------------------------------
     "东方卫视" to listOf("http://38.75.136.137:98/gslb/dsdqpub/dfwshd.m3u8?auth=testpub"),
     "湖南卫视" to listOf(
-        "http://38.75.136.137:98/gslb/dsdqpub/hnwshd.m3u8?auth=testpub",
         "http://hlsal-ldvt.qing.mgtv.com/nn_live/nn_x64/dWlwPTEyNy4wLjAuMSZ1aWQ9cWluZy1jbXMmbm5fdGltZXpvbmU9OCZjZG5leF9pZD1hbF9obHNfbGR2dCZ1dWlkPTliODY4NmU5ZTM2YzYwMmMmZT02OTE0NjA0JnY9MSZpZD1ITldTWkdTVCZzPTcwN2RiYTc2YzJjNmJmMTQ4MmUyZGYzOWU2NWM3YWFi/HNWSZGST.m3u8", // HEVC 2160p
+        "http://38.75.136.137:98/gslb/dsdqpub/hnwshd.m3u8?auth=testpub",
     ),
     "湖北卫视" to listOf("http://38.75.136.137:98/gslb/dsdqpub/hbwshd.m3u8?auth=testpub"),
     "辽宁卫视" to listOf("http://38.75.136.137:98/gslb/dsdqpub/lnwshd.m3u8?auth=testpub"),
     "江苏卫视" to listOf(
-        "http://38.75.136.137:98/gslb/dsdqpub/jswshd.m3u8?auth=testpub",
         "http://8.138.7.223/tv/jsws4k.php",
+        "http://38.75.136.137:98/gslb/dsdqpub/jswshd.m3u8?auth=testpub",
     ),
     "江西卫视" to listOf("http://38.75.136.137:98/gslb/dsdqpub/jxwshd.m3u8?auth=testpub"),
     "山东卫视" to listOf("http://38.75.136.137:98/gslb/dsdqpub/sdwshd.m3u8?auth=testpub"),
     "广东卫视" to listOf(
-        "http://38.75.136.137:98/gslb/dsdqpub/gdwshd.m3u8?auth=testpub",
         "https://h5cul1yar48um3t.wcetv.com/hls/gdsatellite.m3u8", // 720p
+        "http://38.75.136.137:98/gslb/dsdqpub/gdwshd.m3u8?auth=testpub",
     ),
     "广西卫视" to listOf("http://38.75.136.137:98/gslb/dsdqpub/gxwshd.m3u8?auth=testpub"),
     "重庆卫视" to listOf("http://38.75.136.137:98/gslb/dsdqpub/cqwshd.m3u8?auth=testpub"),
@@ -207,13 +207,13 @@ internal val backupStreams: Map<String, List<String>> = mapOf(
     ),
     "贵州卫视" to listOf("http://38.75.136.137:98/gslb/dsdqpub/gzwshd.m3u8?auth=testpub"),
     "北京卫视" to listOf(
-        "http://38.75.136.137:98/gslb/dsdqpub/bjwshd.m3u8?auth=testpub",
         "http://go.bkpcp.top/mg/bjws", // 720p
+        "http://38.75.136.137:98/gslb/dsdqpub/bjwshd.m3u8?auth=testpub",
     ),
     "黑龙江卫视" to listOf("http://38.75.136.137:98/gslb/dsdqpub/hljwshd.m3u8?auth=testpub"),
     "浙江卫视" to listOf(
-        "http://38.75.136.137:98/gslb/dsdqpub/zjwshd.m3u8?auth=testpub",
         "https://ali-xwl.cztv.com/live/channel4k2160p.m3u8", // HEVC 2160p
+        "http://38.75.136.137:98/gslb/dsdqpub/zjwshd.m3u8?auth=testpub",
     ),
     "安徽卫视" to listOf(
         "http://38.75.136.137:98/gslb/dsdqpub/ahwshd.m3u8?auth=testpub",
@@ -229,23 +229,29 @@ internal val backupStreams: Map<String, List<String>> = mapOf(
 
     // ---- 国际 --------------------------------------------------------------
     "CGTN" to listOf(
+        "https://english-livebkali.cgtn.com/live/encgtn.m3u8", // 1080p; fast startup verified 2026-11-24
         "https://hlspackager.akamaized.net/live/DB/CGTN_ENGLISH/HLS/CGTN_ENGLISH.m3u8",
     ),
     "CGTN法语频道" to listOf(
+        "https://francais-liveali.cgtn.com/hls/LSvev95OuFZtKLc6CeKEFYXj220802LSTeV6PO0Ut9r71Uq3k5goCA220802cd/playlist.m3u8", // 1080p; fast startup verified 2026-11-24
         "https://dash4.antik.sk/live/test_cgtn_fra_tizen/playlist.m3u8", // 720p
     ),
     "CGTN俄语频道" to listOf(
+        "https://russian-liveali.cgtn.com/hls/LSvexABhNipibK5KRuUkvHZ7220802LSTeze9o8tdFXMHsb1VosgoT220802cd/playlist.m3u8", // 1080p; fast startup verified 2026-11-24
         "https://dash4.antik.sk/live/test_cgtn_rus_tizen/playlist.m3u8", // 720p
     ),
     "CGTN阿拉伯语频道" to listOf(
-        "https://hlspackager.akamaized.net/live/DB/CGTN_ARABIC/HLS/CGTN_ARABIC.m3u8",
+        "https://arabic-liveali.cgtn.com/hls/LSveq57bErWLinBnxosqjisZ220802LSTefTAS9zc9mpU08y3np9TH220802cd/playlist.m3u8", // 1080p; fast startup verified 2026-11-24
         "https://dash3.antik.sk/live/test_cgtn_arb_tizen/playlist.m3u8",
+        "https://hlspackager.akamaized.net/live/DB/CGTN_ARABIC/HLS/CGTN_ARABIC.m3u8",
     ),
     "CGTN西班牙语频道" to listOf(
+        "https://espanol-liveali.cgtn.com/hls/LSveOGBaBw41Ea7ukkVAUdKQ220802LSTexu6xAuFH8VZNBLE1ZNEa220802cd/playlist.m3u8", // 1080p; fast startup verified 2026-11-24
         "https://dash4.antik.sk/live/test_cgtn_esp_tizen/playlist.m3u8", // 720p
         "https://dash3.antik.sk/live/test_cgtn_esp_tizen/playlist.m3u8", // 720p
     ),
     "CGTN外语纪录频道" to listOf(
+        "https://english-livetx.cgtn.com/hls/yypdjlctzb_hd.m3u8", // 720p; fast startup verified 2026-11-24
         "https://hlspackager.akamaized.net/live/DB/CGTN_DOCUMENTARY/HLS/CGTN_DOCUMENTARY.m3u8",
     ),
 )

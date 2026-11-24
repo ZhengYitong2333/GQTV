@@ -92,23 +92,7 @@ class SettingFragment : DialogFragment() {
         val initialFocus = restoredFocus ?: focusId
         super.onStart()
         val ui = binding ?: return
-        val window = requireDialog().window ?: return
-        val metrics = resources.displayMetrics
-        val density = metrics.density
-        val width = (metrics.widthPixels * .25f).roundToInt()
-            .coerceAtLeast((248 * density).roundToInt()).coerceAtMost((metrics.widthPixels * .88f).toInt())
-        window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-        window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
-        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-        window.setBackgroundDrawableResource(R.drawable.tv_panel)
-        window.attributes = window.attributes.apply {
-            gravity = Gravity.END or Gravity.CENTER_VERTICAL
-            x = (metrics.widthPixels * .045f).roundToInt()
-        }
-        if (Build.VERSION.SDK_INT >= 31 && window.windowManager.isCrossWindowBlurEnabled) {
-            window.setBackgroundBlurRadius((15 * density).roundToInt())
-        }
-        window.setLayout(width, WindowManager.LayoutParams.WRAP_CONTENT)
+        styleSettingsWindow()
         requireDialog().setOnKeyListener { _, key, event ->
             when (key) {
                 KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_ESCAPE, KeyEvent.KEYCODE_MENU -> {
@@ -192,4 +176,24 @@ class SettingFragment : DialogFragment() {
     }
 
     companion object { const val TAG = "SettingFragment" }
+}
+
+internal fun DialogFragment.styleSettingsWindow() {
+    val window = requireDialog().window ?: return
+    val metrics = resources.displayMetrics
+    val density = metrics.density
+    val width = (metrics.widthPixels * .25f).roundToInt()
+        .coerceAtLeast((248 * density).roundToInt()).coerceAtMost((metrics.widthPixels * .88f).toInt())
+    window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+    window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+    window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+    window.setBackgroundDrawableResource(R.drawable.tv_panel)
+    window.attributes = window.attributes.apply {
+        gravity = Gravity.END or Gravity.CENTER_VERTICAL
+        x = (metrics.widthPixels * .045f).roundToInt()
+    }
+    if (Build.VERSION.SDK_INT >= 31 && window.windowManager.isCrossWindowBlurEnabled) {
+        window.setBackgroundBlurRadius((15 * density).roundToInt())
+    }
+    window.setLayout(width, WindowManager.LayoutParams.WRAP_CONTENT)
 }

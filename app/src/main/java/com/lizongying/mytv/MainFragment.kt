@@ -30,6 +30,7 @@ class MainFragment : Fragment(R.layout.menu) {
     private var binding: MenuBinding? = null
     private val host get() = requireActivity() as MainActivity
     private val channels = TVList.list.values.flatten().map(::TVViewModel)
+    internal var requestPrimary: (TVViewModel) -> Unit = Request::fetchData
     private var current = 0
     internal val currentChannel: TVViewModel? get() = channels.getOrNull(current)
     private var grid: Boolean? = null
@@ -69,14 +70,13 @@ class MainFragment : Fragment(R.layout.menu) {
                     host.selectChannel(channel, reason != "retry")
                     if (reason != "retry") channel.setErrInfo("")
                     when {
-                        // Pay channels have no token-free source of their own;
-                        // their ladder is the first line, not a fallback.
-                        channel.getTV().backupOnly -> {
-                            if (!host.tryBackup(channel)) {
+                        // Start from the last decoded backup, or the catalog for backup-only channels.
+                        channel.getTV().backupOnly || (reason != "retry" && host.playbackSettings().hasRememberedBackup(channel)) -> {
+                            if (!host.tryBackup(channel, beforePrimary = true)) {
                                 channel.setErrInfo(getString(R.string.source_unavailable))
                             }
                         }
-                        channel.getTV().pid.isNotEmpty() -> Request.fetchData(channel)
+                        channel.getTV().pid.isNotEmpty() -> requestPrimary(channel)
                         else -> playIfReady(channel)
                     }
                     host.showInfoFragment(channel)
@@ -143,6 +143,14 @@ class MainFragment : Fragment(R.layout.menu) {
         host.closeBrowser()
     }
 
+    internal var fetchGuide: (TVViewModel) -> Unit = { channel ->
+        when (channel.getTV().programType) {
+            ProgramType.Y_PROTO -> Request.fetchYProtoEPG(channel)
+            ProgramType.Y_JCE -> Request.fetchYJceEPG(channel)
+            ProgramType.F -> Request.fetchFEPG(channel)
+        }
+    }
+
     private fun requestGuide(position: Int) {
         val channel = channels.getOrNull(position) ?: return
         if (channel.getTV().pid.isEmpty()) return
@@ -152,11 +160,7 @@ class MainFragment : Fragment(R.layout.menu) {
         val retryAfter = if (hasUpcoming) 60 * 60_000L else 60_000L
         if (last != null && now - last < retryAfter) return
         guideRequests[position] = now
-        when (channel.getTV().programType) {
-            ProgramType.Y_PROTO -> Request.fetchYProtoEPG(channel)
-            ProgramType.Y_JCE -> Request.fetchYJceEPG(channel)
-            ProgramType.F -> Request.fetchFEPG(channel)
-        }
+        fetchGuide(channel)
     }
 
     private fun renderProgram() {

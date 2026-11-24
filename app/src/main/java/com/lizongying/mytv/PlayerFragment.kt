@@ -6,6 +6,7 @@ import androidx.annotation.OptIn
 import androidx.fragment.app.Fragment
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
@@ -21,6 +22,10 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     private var channel: TVViewModel? = null
     private var media: MediaItem? = null
     private var usingBackup = false
+    internal var lookupBackup: (String) -> List<String>? = ::backupSource
+    private var backupLines = emptyList<String>()
+    private var remainingLines: Iterator<Int>? = null
+    private var primaryStillAvailable = false
     private var backupLine = 0
     private var retriedLine = false
     private var selectedHeight: Int? = null
@@ -50,6 +55,9 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
             channel = model
             media = null
             usingBackup = false
+            backupLines = emptyList()
+            remainingLines = null
+            primaryStillAvailable = false
             backupLine = 0
             retriedLine = false
             selectedHeight = null
@@ -68,28 +76,35 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         prepareMedia()
     }
 
-    /**
-     * Enters backup playback for a channel whose own source just failed.
-     * Once here, [retry] walks down the remaining verified lines.
-     */
-    fun tryBackup(model: TVViewModel): Boolean {
-        if (usingBackup) return false
-        return advanceBackup(model)
+    internal fun hasRememberedBackup(model: TVViewModel): Boolean {
+        val tv = model.getTV()
+        val remembered = SP.lastBackup(tv.pid) ?: return false
+        return remembered in lookupBackup(tv.alias).orEmpty()
     }
 
-    /** Plays backup line 0, or one past the current line when already in backup. */
-    private fun advanceBackup(model: TVViewModel): Boolean {
-        if (channel !== model || model.getTV().pid.isEmpty()) return false
-        val lines = backupSource(model.getTV().alias) ?: return false
-        val next = if (usingBackup) backupLine + 1 else 0
-        if (next !in lines.indices) return false
+    fun tryBackup(model: TVViewModel, beforePrimary: Boolean = false): Boolean {
+        val tv = model.getTV()
+        if (channel !== model || tv.pid.isEmpty() || remainingLines != null) return false
+        backupLines = lookupBackup(tv.alias).orEmpty()
+        if (backupLines.isEmpty()) return false
+        val preferred = backupLines.indexOf(SP.lastBackup(tv.pid))
+        val indices = backupLines.indices.filter { it != preferred }
+        remainingLines = (if (preferred >= 0) listOf(preferred) + indices else indices).iterator()
+        primaryStillAvailable = beforePrimary && !tv.backupOnly
+        return advanceBackup()
+    }
+
+    private fun advanceBackup(): Boolean {
+        val remaining = remainingLines ?: return false
+        if (!remaining.hasNext()) return false
+        val next = remaining.next()
         view?.removeCallbacks(retry)
         usingBackup = true
         backupLine = next
         retriedLine = false
         failures = 0
         setVideoTrack(null)
-        media = MediaItem.fromUri(lines[next])
+        media = MediaItem.Builder().setUri(backupLines[next]).setMimeType(MimeTypes.APPLICATION_M3U8).build()
         prepareMedia()
         return true
     }
@@ -104,8 +119,7 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     /** 1-based line number and total lines, or null when playing the app's own source. */
     internal fun backupPosition(): Pair<Int, Int>? {
         if (!usingBackup) return null
-        val total = channel?.getTV()?.alias?.let { backupSource(it)?.size } ?: return null
-        return (backupLine + 1) to total
+        return (backupLine + 1) to backupLines.size
     }
 
     @OptIn(UnstableApi::class)
@@ -163,12 +177,23 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
                 retriedLine = true
                 view?.removeCallbacks(retry)
                 view?.postDelayed(retry, 1_000L)
-            } else if (!advanceBackup(model)) {
-                model.setErrInfo("播放错误")
+            } else {
+                val pid = model.getTV().pid
+                if (SP.lastBackup(pid) == backupLines[backupLine]) SP.rememberBackup(pid, null)
+                if (!advanceBackup()) {
+                    if (primaryStillAvailable) {
+                        primaryStillAvailable = false
+                        usingBackup = false
+                        media = null
+                        model.changed("retry")
+                    } else model.setErrInfo("播放错误")
+                }
             }
             return
         }
         model.setErrInfo("播放错误")
+        // The error observer may already have switched the media synchronously.
+        if (usingBackup) return
         if (failures < 3) {
             view?.removeCallbacks(retry)
             view?.postDelayed(retry, 1_000L shl failures)
@@ -176,10 +201,16 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         }
     }
 
+    override fun onRenderedFirstFrame() {
+        val item = media ?: return
+        if (player?.currentMediaItem != item) return
+        val pid = channel?.getTV()?.pid ?: return
+        SP.rememberBackup(pid, if (usingBackup) backupLines[backupLine] else null)
+    }
+
     override fun onIsPlayingChanged(isPlaying: Boolean) {
         if (isPlaying) {
             failures = 0
-            retriedLine = false
             view?.removeCallbacks(retry)
             channel?.setErrInfo("")
         }

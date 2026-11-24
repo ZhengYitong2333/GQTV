@@ -1,6 +1,9 @@
 package com.lizongying.mytv
 
-import android.app.AlertDialog
+import androidx.test.runner.lifecycle.ActivityLifecycleCallback
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
+import com.lizongying.mytv.requests.Request
 import android.graphics.Bitmap
 import android.os.SystemClock
 import android.view.KeyEvent
@@ -37,6 +40,21 @@ class TvRemoteTest {
     private lateinit var restorePreferences: () -> Unit
     private val documentaryIndex = catalog.indexOfFirst { it.alias == "CCTV9" }
 
+    private var supplyReady = true
+    private var testLines: List<String>? = null
+    private val localPlayback = ActivityLifecycleCallback { activity, stage ->
+        if (activity is MainActivity && stage == Stage.CREATED) {
+            browser(activity).fetchGuide = {}
+            browser(activity).requestPrimary = activity::play
+            activity.playbackSettings().lookupBackup = { alias -> testLines ?: backupSource(alias) }
+            if (supplyReady) activity.onRequestFinished(null)
+            else {
+                Utils.clearListener(activity)
+                Request.clearListener(activity)
+            }
+        }
+    }
+
     @Before fun launch() {
         // The test APK owns the clip. Product code still tunes via the normal channel model and Media3.
         val file = File(instrumentation.targetContext.cacheDir, "remote-test.mp4")
@@ -44,11 +62,12 @@ class TvRemoteTest {
             file.outputStream().use { output -> input.copyTo(output) }
         }
         catalog.forEach { channel ->
-            channel.pid = ""
+            channel.backupOnly = false
             channel.videoUrl = listOf(file.toURI().toString())
         }
         catalog.last().videoUrl = emptyList()
         instrumentation.runOnMainSync {
+            ActivityLifecycleMonitorRegistry.getInstance().addLifecycleCallback(localPlayback)
             val last = SP.itemPosition
             val time = SP.time
             val grid = SP.grid
@@ -82,10 +101,13 @@ class TvRemoteTest {
     @After fun close() {
         if (::scenario.isInitialized) scenario.close()
         catalog.zip(originals).forEach { (channel, original) ->
-            channel.pid = original.pid
+            channel.backupOnly = original.backupOnly
             channel.videoUrl = original.videoUrl
         }
-        if (::restorePreferences.isInitialized) instrumentation.runOnMainSync { restorePreferences() }
+        instrumentation.runOnMainSync {
+            ActivityLifecycleMonitorRegistry.getInstance().removeLifecycleCallback(localPlayback)
+            if (::restorePreferences.isInitialized) restorePreferences()
+        }
     }
 
     private fun key(code: Int, times: Int = 1) {
@@ -95,8 +117,8 @@ class TvRemoteTest {
         }
     }
 
-    private fun awaitUi(label: String, predicate: (MainActivity) -> Boolean) {
-        val deadline = SystemClock.elapsedRealtime() + 6_000
+    private fun awaitUi(label: String, timeout: Long = 6_000, predicate: (MainActivity) -> Boolean) {
+        val deadline = SystemClock.elapsedRealtime() + timeout
         do {
             var passed = false
             scenario.onActivity { passed = predicate(it) }
@@ -314,9 +336,6 @@ class TvRemoteTest {
     @Test fun backupLadderStartsAtTheFirstLineAndReportsItsPosition() {
         scenario.onActivity { host ->
             val channel = browser(host).currentChannel!!
-            // tryBackup only applies to channels that arrived with their own
-            // source, so give this one a pid back for the duration of the test.
-            channel.getTV().pid = "test"
             assertTrue(host.tryBackup(channel))
         }
         awaitUi("backup line one of the ladder") {
@@ -347,6 +366,134 @@ class TvRemoteTest {
         awaitUi("two-digit tune") { SP.itemPosition == 1 }
     }
 
+    @Test fun migratesEveryLegacyPositionAndRestoresByPid() {
+        val prefs = instrumentation.targetContext.getSharedPreferences("MainActivity", 0)
+        val old = originals.filterNot { it.mustToken }
+        assertEquals(51, old.size)
+        scenario.onActivity {
+            old.forEachIndexed { index, channel ->
+                prefs.edit().remove("channel_pid").putInt("position", index).apply()
+                assertEquals(channel.pid, catalog[SP.itemPosition].pid)
+                assertFalse(prefs.contains("position"))
+                assertEquals(channel.pid, prefs.getString("channel_pid", null))
+            }
+            for (position in listOf(null, -1, 999)) {
+                prefs.edit().remove("channel_pid").remove("position").apply {
+                    if (position != null) putInt("position", position)
+                }.apply()
+                assertEquals(0, SP.itemPosition)
+            }
+            prefs.edit().putString("channel_pid", "removed").apply()
+            assertEquals(0, SP.itemPosition)
+            prefs.edit().remove("channel_pid").putInt("position", 2).apply()
+        }
+        scenario.recreate()
+        scenario.onActivity { assertEquals("CCTV4", browser(it).currentChannel!!.getTV().alias) }
+        val phoenix = catalog.indexOfFirst { it.title == "凤凰卫视中文台" }
+        scenario.onActivity { it.play(phoenix) }
+        scenario.recreate()
+        scenario.onActivity { assertEquals(catalog[phoenix].pid, browser(it).currentChannel!!.getTV().pid) }
+    }
+
+    @Test fun slowBackupRetriesOnceAfterPlaybackThenDecodesPhpLine() {
+        LocalHls(instrumentation.context.assets).use { server ->
+            scenario.onActivity { host ->
+                testLines = listOf(server.broken, server.healthy)
+                browser(host).currentChannel!!.addVideoUrl("file:///missing-primary.mp4")
+                host.play(browser(host).currentChannel!!)
+            }
+            repeat(2) { attempt ->
+                awaitUi("decoded broken line, attempt " + attempt, 30_000) {
+                    val engine = it.findViewById<PlayerView>(R.id.player_view).player!!
+                    server.firstLoads.get() == attempt + 1 && engine.isPlaying &&
+                        engine.currentMediaItem?.localConfiguration?.uri.toString() == server.broken &&
+                        engine.videoSize.width == 960
+                }
+                server.breakSegment.release()
+            }
+            awaitUi("decoded second line", 30_000) {
+                SP.lastBackup(catalog[documentaryIndex].pid) == server.healthy &&
+                    it.playbackSettings().backupPosition() == (2 to 2) &&
+                    it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true &&
+                    it.playbackSettings().videoResolution() == (960 to 540)
+            }
+            assertEquals(2, server.firstLoads.get())
+            assertEquals(1, server.healthyLoads.get())
+            supplyReady = false
+            scenario.recreate()
+            awaitUi("remembered second line plays on cold start") {
+                it.playbackSettings().backupPosition() == (2 to 2) &&
+                    it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true
+            }
+            assertEquals(2, server.firstLoads.get())
+            assertEquals(2, server.healthyLoads.get())
+        }
+    }
+
+    @Test fun failedRememberedLineFallsBackAndAnObsoleteLineIsIgnored() {
+        LocalHls(instrumentation.context.assets).use { server ->
+            val pid = catalog[documentaryIndex].pid
+            scenario.onActivity {
+                testLines = listOf(server.healthy, server.invalid)
+                SP.rememberBackup(pid, server.invalid)
+                it.play(documentaryIndex)
+                assertEquals(2 to 2, it.playbackSettings().backupPosition())
+            }
+            awaitUi("remaining line becomes preferred", 30_000) {
+                SP.lastBackup(pid) == server.healthy && it.playbackSettings().backupPosition() == (1 to 2)
+            }
+            scenario.onActivity {
+                testLines = listOf(server.invalid)
+                it.play(documentaryIndex)
+                assertNull(it.playbackSettings().backupPosition())
+            }
+            awaitUi("removed route replaced by primary") { SP.lastBackup(pid) == null }
+            scenario.onActivity {
+                SP.rememberBackup(pid, server.invalid)
+                it.play(documentaryIndex)
+                assertEquals(1 to 1, it.playbackSettings().backupPosition())
+            }
+            awaitUi("exhausted remembered routes fall back to primary", 30_000) {
+                it.playbackSettings().backupPosition() == null &&
+                    it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true &&
+                    SP.lastBackup(pid) == null
+            }
+        }
+    }
+
+    @Test fun backupOnlyColdStartAndExhaustion() {
+        LocalHls(instrumentation.context.assets).use { server ->
+            val target = originals.indexOfFirst { it.backupOnly }
+            scenario.onActivity {
+                catalog[target].backupOnly = true
+                testLines = listOf(server.healthy)
+                SP.itemPosition = target
+                supplyReady = false
+            }
+            scenario.recreate()
+            awaitUi("backup plays before initialization") {
+                it.playbackSettings().backupPosition() == (1 to 1) &&
+                    it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true
+            }
+            scenario.onActivity { it.onRequestFinished(null) }
+            instrumentation.waitForIdleSync()
+            assertEquals(1, server.healthyLoads.get())
+            val errorsAt = mutableListOf<Pair<Int, Int>?>()
+            scenario.onActivity { activity ->
+                browser(activity).currentChannel!!.errInfo.observe(activity) { error ->
+                    if (!error.isNullOrEmpty()) errorsAt.add(activity.playbackSettings().backupPosition())
+                }
+                testLines = listOf(server.invalid, server.invalid)
+                activity.play(target)
+            }
+            awaitUi("exhausted both lines", 30_000) {
+                it.playbackSettings().backupPosition() == (2 to 2) &&
+                    it.supportFragmentManager.findFragmentByTag("ErrorFragment")?.isHidden == false
+            }
+            scenario.onActivity { assertEquals(listOf(2 to 2), errorsAt) }
+        }
+    }
+
     @Test fun programBoundariesAndMissingSchedule() {
         val entries = listOf(EPG("一", 100), EPG("二", 200), EPG("三", 300))
         assertEquals(-1, emptyList<EPG>().currentProgramIndex(100))
@@ -365,7 +512,8 @@ class TvRemoteTest {
                 File(directory, name).outputStream().use { output -> input.copyTo(output) }
             }
         }
-        catalog[documentaryIndex].videoUrl = listOf(File(directory, "master.m3u8").toURI().toString())
+        testLines = listOf(File(directory, "master.m3u8").toURI().toString())
+        catalog[documentaryIndex].backupOnly = true
         scenario.recreate()
         awaitUi("both video resolutions") {
             it.playbackSettings().resolutionOptions() == listOf(960 to 540, 480 to 270)
@@ -378,12 +526,17 @@ class TvRemoteTest {
             key(KeyEvent.KEYCODE_DPAD_CENTER)
             awaitUi("resolution dialog focus") {
                 val choice = settings(it)?.childFragmentManager?.findFragmentByTag(ResolutionFragment.TAG) as? ResolutionFragment
-                val dialog = choice?.dialog as? AlertDialog
+                val dialog = choice?.dialog
+                val options = choice?.view?.findViewById<android.view.ViewGroup>(R.id.options)
                 dialog?.window?.decorView?.hasWindowFocus() == true &&
-                    dialog.listView.selectedItemPosition == selectedPosition
+                    options?.getChildAt(selectedPosition)?.isFocused == true &&
+                    ArrayList<android.view.View>().apply {
+                        dialog.window!!.decorView.findViewsWithText(this, "1/1", android.view.View.FIND_VIEWS_WITH_TEXT)
+                    }.isNotEmpty()
             }
         }
         openResolutionDialog(0)
+        capture("resolution-on-tv")
         key(KeyEvent.KEYCODE_DPAD_DOWN)
         key(KeyEvent.KEYCODE_DPAD_CENTER)
         awaitUi("960 by 540 decoded frames") {

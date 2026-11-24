@@ -87,7 +87,7 @@ class MainActivity : FragmentActivity(), Request.RequestListener, OnSharedPrefer
 
     private fun startIfReady() {
         if (resumed && !playbackStarted && ready.containsAll(requiredParts) &&
-            ("request" in ready || browser.currentChannel?.getTV()?.pid.isNullOrEmpty())) {
+            ("request" in ready || browser.currentChannel?.let { it.getTV().backupOnly || it.getTV().pid.isEmpty() || player.hasRememberedBackup(it) } == true)) {
             playbackStarted = true
             browser.fragmentReady()
         }
@@ -115,7 +115,7 @@ class MainActivity : FragmentActivity(), Request.RequestListener, OnSharedPrefer
 
     fun selectChannel(channel: TVViewModel, userTune: Boolean) = player.select(channel, userTune)
     fun play(channel: TVViewModel) = player.play(channel)
-    fun tryBackup(channel: TVViewModel) = player.tryBackup(channel)
+    fun tryBackup(channel: TVViewModel, beforePrimary: Boolean = false) = player.tryBackup(channel, beforePrimary)
     internal fun playbackSettings() = player
     fun play(position: Int) = browser.play(position)
 
