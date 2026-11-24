@@ -42,11 +42,14 @@ internal class TuneTiming(
         } else if (completed && task == firstLoad) event("segment_end")
     }
 
-    fun frame(width: Int, height: Int) {
+    fun frame(width: Int, height: Int): Boolean {
         if (firstFrame == null) {
             firstFrame = clock()
             event("first_frame", "width=$width height=$height")
-        } else event("route_frame", "width=$width height=$height")
+            return true
+        }
+        event("route_frame", "width=$width height=$height")
+        return false
     }
 
     fun buffering(active: Boolean, now: Long = clock()) {

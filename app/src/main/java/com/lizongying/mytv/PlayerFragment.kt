@@ -29,6 +29,10 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     private var binding: PlayerBinding? = null
     private var outputView: PlayerView? = null
     private var timing: TuneTiming? = null
+    private val finishQualityWindow = Runnable {
+        val engine = player ?: return@Runnable
+        timing?.buffering(engine.playWhenReady && engine.playbackState == Player.STATE_BUFFERING)
+    }
     private var timedOut = false
     private val frameListener = object : AnalyticsListener {
         private fun currentLoad(time: AnalyticsListener.EventTime, data: MediaLoadData): Boolean {
@@ -176,6 +180,8 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     fun select(model: TVViewModel, userTune: Boolean, cold: Boolean = false) {
         if (channel !== model || userTune) {
             view?.removeCallbacks(retry)
+            view?.removeCallbacks(finishQualityWindow)
+            val replacingChannel = channel != null
             timing?.finish("retuned")
             timing = TuneTiming(model.getTV().alias.ifEmpty { model.getTV().title }, cold).also { model.tuneId = it.id }
             tuneStarted = SystemClock.elapsedRealtime()
@@ -192,9 +198,8 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
             selectedHeight = null
             failures = 0
             setVideoTrack(null)
-            val hadVideo = player?.currentMediaItem != null
             player?.clearMediaItems()
-            if (hadVideo) replaceOutput()
+            if (replacingChannel) replaceOutput()
         }
     }
 
@@ -358,7 +363,9 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         if (reportedFrame) return
         reportedFrame = true
         health?.rendered()
-        timing?.frame(player?.videoSize?.width ?: 0, player?.videoSize?.height ?: 0)
+        if (timing?.frame(player?.videoSize?.width ?: 0, player?.videoSize?.height ?: 0) == true) {
+            view?.postDelayed(finishQualityWindow, 30_000)
+        }
         val route = backupPosition()?.let { (line, count) -> "备用 $line/$count" } ?: "主源"
         Log.i("PlaybackHealth", "${channel?.getTV()?.alias} $route 首帧 ${SystemClock.elapsedRealtime() - tuneStarted}ms")
     }
@@ -392,6 +399,7 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     }
 
     override fun onStop() {
+        view?.removeCallbacks(finishQualityWindow)
         timing?.finish("stopped")
         timing = null
         health = null
