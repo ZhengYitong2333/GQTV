@@ -46,6 +46,28 @@ class RouteQualityTest {
         observation.errors++
         assertEquals(1, observation.snapshot(3400, "route_changed").errors)
     }
+    @Test fun repeatedScansCannotDisplaceAStableObservation() {
+        val good = sample("stable", at = now - 1000)
+        val scans = (1..20).map { sample("scan-$it", duration = 500, at = now - 1000 + it) }
+        val retained = scans.fold(listOf(good)) { records, scan -> RouteQuality.retain(records + scan, now) }
+        assertTrue(retained.any { it.id == "stable" })
+        assertEquals(3, retained.size)
+    }
+    @Test fun elapsedIdleTimeCannotQualifyAnEndedOrFrozenStream() {
+        val observation = RouteObservation("b", "channel", 0) { now }
+        observation.rendered(100, 1280, 720)
+        for (second in 0L..20L) observation.progress(100 + second * 1000, true, second * 1000)
+        observation.progress(30_100, false, 20_000)
+        assertFalse(observation.snapshot(30_100, "stopped").stable)
+    }
+    @Test fun positionQuantizationDoesNotAccumulateAsMissingPlaybackTime() {
+        val observation = RouteObservation("b", "channel", 0) { now }
+        observation.rendered(0, 1280, 720)
+        for (tick in 0L..60L) observation.progress(tick * 500, true, tick * 500 + if (tick % 2 == 0L) 40 else 0)
+        assertEquals(30_000, observation.snapshot(30_000, "observing").playedMs)
+        assertTrue(observation.snapshot(30_000, "observing").stable)
+    }
+
     @Test fun stableObservationRequiresThirtySeconds() {
         val observation = RouteObservation("b", "channel", 0) { now }
         observation.rendered(100, 1280, 720)

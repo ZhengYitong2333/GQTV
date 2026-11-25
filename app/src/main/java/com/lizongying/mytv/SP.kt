@@ -68,7 +68,7 @@ object SP {
     internal fun saveRoute(pid: String, route: String, sample: RouteSample) {
         if (!RouteQuality.enabled || pid.isEmpty()) return
         val records = routeRecords(pid).mapValues { (_, samples) -> RouteQuality.recent(samples, sample.at) }.toMutableMap()
-        records[route] = (records[route].orEmpty().filter { it.id != sample.id } + sample).takeLast(8)
+        records[route] = RouteQuality.retain(records[route].orEmpty().filter { it.id != sample.id } + sample, sample.at)
         writeRouteRecords(pid, records)
     }
 

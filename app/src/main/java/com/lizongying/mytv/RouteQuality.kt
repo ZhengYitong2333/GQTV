@@ -16,7 +16,7 @@ internal data class RouteSample(
     val ended: String,
     val playedMs: Long = 0
 ) {
-    val stable get() = frameMs != null && observedMs >= 30_000 && playedMs >= 20_000 && errors == 0 &&
+    val stable get() = frameMs != null && observedMs >= 30_000 && playedMs >= 20_000 && playedMs + bufferMs >= observedMs - 1_500 && errors == 0 &&
         timeouts == 0 && severe == 0 && bufferMs <= 3_000
     val failed get() = errors > 0 || timeouts > 0 || severe > 0
 }
@@ -30,6 +30,13 @@ internal object RouteQuality {
 
     fun recent(samples: List<RouteSample>, now: Long) = samples
         .filter { it.at <= now && now - it.at <= RETENTION }.takeLast(8)
+
+    fun retain(samples: List<RouteSample>, now: Long): List<RouteSample> {
+        val valid = samples.filter { it.at <= now && now - it.at <= RETENTION }
+        val (meaningful, brief) = valid.partition { it.observedMs >= 30_000 || it.failed }
+        val scans = brief.takeLast(2)
+        return (meaningful.takeLast(8 - scans.size) + scans).sortedBy { it.at }
+    }
 
     fun order(routes: List<String>, records: Map<String, List<RouteSample>>, remembered: String?, now: Long): List<String> {
         fun samples(route: String) = recent(records[route].orEmpty(), now)
@@ -95,7 +102,7 @@ internal class RouteObservation(val route: String, val pid: String, private val 
         val previous = lastPosition
         val tick = lastTick
         if (frame != null && playing && previous != null && tick != null && position > previous) {
-            playedMs += minOf(now - tick, position - previous, 1_000L).coerceAtLeast(0)
+            playedMs += (now - tick).coerceIn(0, 1_000L)
         }
         lastTick = now
         lastPosition = position
