@@ -75,12 +75,40 @@ class RouteQualityTest {
         observation.progress(30_100, false, 20_000)
         assertFalse(observation.snapshot(30_100, "stopped").stable)
     }
-    @Test fun positionQuantizationDoesNotAccumulateAsMissingPlaybackTime() {
+    @Test fun renderedProgressDoesNotDependOnTheSlidingLivePosition() {
         val observation = RouteObservation("b", "channel", 0) { now }
         observation.rendered(0, 1280, 720)
-        for (tick in 0L..60L) observation.progress(tick * 500, true, tick * 500 + if (tick % 2 == 0L) 40 else 0)
+        for (tick in 0L..60L) observation.progress(tick * 500, true, tick * 12)
         assertEquals(30_000, observation.snapshot(30_000, "observing").playedMs)
         assertTrue(observation.snapshot(30_000, "observing").stable)
+    }
+
+    @Test fun aPlayingClockWithoutNewRenderedFramesCannotQualify() {
+        val observation = RouteObservation("b", "channel", 0) { now }
+        observation.rendered(0, 1280, 720)
+        for (tick in 0L..60L) observation.progress(tick * 500, true, 1)
+        assertEquals(0, observation.snapshot(30_000, "observing").playedMs)
+        assertFalse(observation.snapshot(30_000, "observing").stable)
+    }
+
+    @Test fun decoderCounterResetAndLateSamplesDoNotInventPlayback() {
+        val observation = RouteObservation("b", "channel", 0) { now }
+        observation.rendered(0, 1280, 720)
+        observation.progress(0, true, 100)
+        observation.progress(500, true, 0)
+        observation.progress(30_000, true, 1)
+        assertEquals(1000, observation.snapshot(30_000, "observing").playedMs)
+        assertFalse(observation.snapshot(30_000, "observing").stable)
+    }
+
+    @Test fun decodedFramesBeforeTheVisibleFrameAreNotPlaybackTime() {
+        val observation = RouteObservation("b", "channel", 0) { now }
+        observation.progress(0, true, 1)
+        observation.rendered(900, 1280, 720)
+        observation.progress(1000, true, 25)
+        assertEquals(0, observation.snapshot(1000, "observing").playedMs)
+        observation.progress(1500, true, 38)
+        assertEquals(500, observation.snapshot(1500, "observing").playedMs)
     }
 
     @Test fun stableObservationRequiresThirtySeconds() {

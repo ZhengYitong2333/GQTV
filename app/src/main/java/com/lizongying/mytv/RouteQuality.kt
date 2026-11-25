@@ -99,24 +99,30 @@ internal class RouteObservation(val route: String, val pid: String, private val 
     var unsupportedAudio = false
     private var playedMs = 0L
     private var lastTick: Long? = null
-    private var lastPosition: Long? = null
+    private var lastRenderedFrames: Long? = null
     private var width = 0
     private var height = 0
 
     fun rendered(now: Long, width: Int, height: Int) {
-        if (frame == null) frame = now
+        if (frame == null) {
+            frame = now
+            lastTick = null
+            lastRenderedFrames = null
+        }
         this.width = width
         this.height = height
     }
 
-    fun progress(now: Long, playing: Boolean, position: Long) {
-        val previous = lastPosition
+    fun progress(now: Long, playing: Boolean, renderedFrames: Long) {
+        val previous = lastRenderedFrames
         val tick = lastTick
-        if (frame != null && playing && previous != null && tick != null && position > previous) {
+        // HLS currentPosition can move backwards when its live window slides.
+        // Rendered frames prove presentation progress without trusting that clock.
+        if (frame != null && playing && previous != null && tick != null && renderedFrames > previous) {
             playedMs += (now - tick).coerceIn(0, 1_000L)
         }
         lastTick = now
-        lastPosition = position
+        lastRenderedFrames = renderedFrames
     }
 
     fun videoSize(width: Int, height: Int) {

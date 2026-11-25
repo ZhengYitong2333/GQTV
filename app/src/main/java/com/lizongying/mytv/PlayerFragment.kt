@@ -110,7 +110,9 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
             val model = channel ?: return
             val now = SystemClock.elapsedRealtime()
             timing?.buffering(engine.playWhenReady && engine.playbackState == Player.STATE_BUFFERING, now)
-            observation?.progress(now, engine.isPlaying, engine.currentPosition)
+            val counters = engine.videoDecoderCounters
+            counters?.ensureUpdated()
+            observation?.progress(now, engine.isPlaying, counters?.renderedOutputBufferCount?.toLong() ?: 0L)
             observation?.videoSize(engine.videoSize.width, engine.videoSize.height)
             observation?.buffering(now, engine.playWhenReady && engine.playbackState == Player.STATE_BUFFERING)
             if (now >= nextCheckpoint) {

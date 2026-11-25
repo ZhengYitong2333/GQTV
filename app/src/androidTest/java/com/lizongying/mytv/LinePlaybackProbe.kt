@@ -117,7 +117,8 @@ class LinePlaybackProbe {
                         maxFrameGap = maxOf(maxFrameGap, now - lastRenderedAt!!)
                     } else lastRenderedAt = null
                     previousRendered = rendered
-                    observation?.progress(now, engine.isPlaying, engine.currentPosition)
+                    if (args.getString("progress") == "true") Log.i("LineProbe", "progress ms=${now-start} position=${engine.currentPosition} rendered=$rendered playing=${engine.isPlaying}")
+                    observation?.progress(now, engine.isPlaying, rendered.toLong())
                     observation?.buffering(now, engine.playbackState == Player.STATE_BUFFERING)
                     observation?.videoSize(engine.videoSize.width, engine.videoSize.height)
                 }
