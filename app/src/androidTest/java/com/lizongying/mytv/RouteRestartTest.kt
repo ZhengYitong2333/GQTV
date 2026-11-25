@@ -12,7 +12,7 @@ class RouteRestartTest {
         val pid = "quality-process-fixture"
         if (stage == "write") {
             val sample = RouteSample("persisted", System.currentTimeMillis(), 30000, 1000,
-                1920, 1080, 0, 0, 0, 0, 0, Process.myPid().toString(), 29000)
+                1920, 1080, 0, 0, 0, 0, 0, Process.myPid().toString(), 29000, avcCompat = true, softwareVideo = true)
             SP.writeRouteRecords(pid, mapOf("second" to listOf(sample)))
             assertTrue(SP.flushRouteRecords())
         } else {
@@ -20,6 +20,8 @@ class RouteRestartTest {
             val sample = records.getValue("second").single()
             assertNotEquals(Process.myPid().toString(), sample.ended)
             assertTrue(sample.stable)
+            assertTrue(sample.avcCompat)
+            assertTrue(sample.softwareVideo)
             assertEquals("second", RouteQuality.order(listOf("first", "second"), records, null, System.currentTimeMillis()).first())
             SP.writeRouteRecords(pid, emptyMap())
         }

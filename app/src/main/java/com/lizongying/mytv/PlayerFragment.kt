@@ -21,6 +21,11 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.exoplayer.mediacodec.MediaCodecDecoderException
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.exoplayer.hls.HlsMediaSource
 import com.lizongying.mytv.databinding.PlayerBinding
 import com.lizongying.mytv.models.TVViewModel
 import com.lizongying.mytv.requests.Request
@@ -49,7 +54,7 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
 
     private fun beginObservation(route: String) {
         saveObservation("route_changed")
-        observation = channel?.getTV()?.let { RouteObservation(route, it.pid, SystemClock.elapsedRealtime()) }
+        observation = channel?.getTV()?.let { RouteObservation(route, it.pid, SystemClock.elapsedRealtime(), avcCompat, softwareVideo) }
         nextCheckpoint = SystemClock.elapsedRealtime() + 30_000
     }
 
@@ -84,6 +89,8 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     private var channel: TVViewModel? = null
     private var media: MediaItem? = null
     private var usingBackup = false
+    private var avcCompat = false
+    private var softwareVideo = false
     internal var lookupBackup: (String) -> List<String>? = ::backupSource
     private var backupLines = emptyList<String>()
     private var remainingLines: Iterator<Int>? = null
@@ -95,6 +102,7 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     private var health: PlaybackHealth? = null
     private var tuneStarted = 0L
     private var reportedFrame = false
+    private var decodedFrame = false
     private var recoveredLiveWindow = false
     private val monitor = object : Runnable {
         override fun run() {
@@ -116,9 +124,11 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
                     if (!RouteQuality.enabled) SP.rememberBackup(model.getTV().pid, if (usingBackup) backupLines[backupLine] else null)
                 }
                 PlaybackHealth.Decision.SLOW -> {
-                    if (!timedOut) timing?.event(if (reportedFrame) "stall_limit" else "timeout")
+                    if (!timedOut) {
+                        timing?.event(if (reportedFrame) "stall_limit" else "timeout")
+                        if (!reportedFrame) observation?.let { it.timeouts++ }
+                    }
                     timedOut = true
-                    if (!reportedFrame) observation?.let { it.timeouts++ }
                     saveObservation(if (reportedFrame) "stall_limit" else "timeout")
                     forgetCurrentBackup()
                     if (!switchRoute(model)) {
@@ -141,6 +151,8 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     private fun startAttempt() {
         timedOut = false
         reportedFrame = false
+        decodedFrame = false
+        if (RouteQuality.enabled) binding?.tuneCover?.visibility = View.VISIBLE
         health = PlaybackHealth(SystemClock.elapsedRealtime())
         scheduleMonitor()
     }
@@ -160,6 +172,8 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         if (!primaryStillAvailable) return false
         primaryStillAvailable = false
         usingBackup = false
+        avcCompat = false
+        softwareVideo = false
         recoveredLiveWindow = false
         media = null
         player?.stop()
@@ -200,7 +214,13 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
 
     override fun onStart() {
         super.onStart()
-        val engine = ExoPlayer.Builder(requireContext()).build()
+        val renderers = DefaultRenderersFactory(requireContext()).setMediaCodecSelector { mime, secure, tunnel ->
+            val available = MediaCodecSelector.DEFAULT.getDecoderInfos(mime, secure, tunnel)
+            if (RouteQuality.enabled && usingBackup && softwareVideo && mime == MimeTypes.VIDEO_H264)
+                available.filter { it.softwareOnly }.ifEmpty { available }
+            else available
+        }
+        val engine = ExoPlayer.Builder(requireContext(), renderers).build()
         player = engine
         outputView?.player = engine
         engine.addAnalyticsListener(frameListener)
@@ -231,6 +251,8 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
             channel = model
             media = null
             usingBackup = false
+            avcCompat = false
+            softwareVideo = false
             backupLines = emptyList()
             remainingLines = null
             primaryStillAvailable = false
@@ -293,6 +315,13 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         view?.removeCallbacks(retry)
         usingBackup = true
         backupLine = next
+        val previousSoftwareVideo = softwareVideo
+        val profile = if (RouteQuality.enabled) RouteQuality.recent(
+            SP.routeRecords(channel!!.getTV().pid)[backupLines[next]].orEmpty(), System.currentTimeMillis())
+            .lastOrNull { it.frameMs != null && it.errors == 0 && !it.unsupportedAudio } else null
+        avcCompat = profile?.avcCompat ?: false
+        softwareVideo = profile?.softwareVideo ?: false
+        if (previousSoftwareVideo != softwareVideo) player?.stop()
         retriedLine = false
         recoveredLiveWindow = false
         startAttempt()
@@ -361,7 +390,10 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         media = item
         timing?.event("address")
         engine.volume = channel?.getTV()?.volume ?: 1f
-        engine.setMediaItem(item)
+        if (RouteQuality.enabled && usingBackup && avcCompat) {
+            engine.setMediaSource(HlsMediaSource.Factory(DefaultDataSource.Factory(requireContext()))
+                .setExtractorFactory(ContinuousHlsExtractorFactory()).createMediaSource(item))
+        } else engine.setMediaItem(item)
         engine.prepare()
     }
 
@@ -389,6 +421,24 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
             // verified line. The error overlay only appears once the list ends,
             // so a channel that recovers never flashes an error on screen.
             if (!retriedLine) {
+                if (RouteQuality.enabled) {
+                    val causes = generateSequence(error as Throwable) { it.cause }.toList()
+                    val avcParsing = causes.any { cause -> cause.stackTrace.any {
+                        it.className.startsWith("androidx.media3.extractor.ts.H264Reader")
+                    } }
+                    val avcDecoding = causes.filterIsInstance<MediaCodecDecoderException>()
+                        .any { it.codecInfo?.mimeType == MimeTypes.VIDEO_H264 }
+                    if (avcParsing || avcDecoding) {
+                        avcCompat = true
+                        val available = runCatching {
+                            MediaCodecSelector.DEFAULT.getDecoderInfos(MimeTypes.VIDEO_H264, false, false)
+                        }.getOrDefault(emptyList())
+                        val softwareAvailable = available.any { it.softwareOnly }
+                        val emulatedDecoder = available.firstOrNull()?.name?.startsWith("c2.goldfish.") == true
+                        softwareVideo = softwareAvailable && (avcDecoding || emulatedDecoder)
+                        timing?.event("avc_retry", "compat=$avcCompat software=$softwareVideo")
+                    }
+                }
                 retriedLine = true
                 view?.removeCallbacks(retry)
                 view?.postDelayed(retry, 1_000L)
@@ -413,6 +463,15 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         if (output !== surfaceView.holder.surface) return
         val item = media ?: return
         if (player?.currentMediaItem != item) return
+        if (!decodedFrame) timing?.event("decoded_frame", "width=${player?.videoSize?.width ?: 0} height=${player?.videoSize?.height ?: 0}")
+        decodedFrame = true
+        revealDecodedFrame()
+    }
+
+    private fun revealDecodedFrame() {
+        val engine = player ?: return
+        if (!decodedFrame) return
+        if (RouteQuality.enabled && (engine.playbackState != Player.STATE_READY || engine.playWhenReady && !engine.isPlaying)) return
         binding?.tuneCover?.visibility = View.GONE
         if (reportedFrame) return
         reportedFrame = true
@@ -427,9 +486,26 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     }
 
     override fun onPlaybackStateChanged(playbackState: Int) {
+        if (RouteQuality.enabled && usingBackup && playbackState == Player.STATE_ENDED &&
+            player?.playbackState == Player.STATE_ENDED) {
+            timing?.buffering(false)
+            observation?.let { it.buffering(SystemClock.elapsedRealtime(), false); it.errors++ }
+            timing?.event("stream_ended")
+            saveObservation("stream_ended")
+            forgetCurrentBackup()
+            channel?.let {
+                if (!switchRoute(it)) {
+                    health = null
+                    scheduleMonitor()
+                    it.setErrInfo("直播信号已结束")
+                }
+            }
+            return
+        }
         timing?.buffering(playbackState == Player.STATE_BUFFERING && player?.playWhenReady == true)
         observation?.buffering(SystemClock.elapsedRealtime(), playbackState == Player.STATE_BUFFERING && player?.playWhenReady == true)
         health?.buffering(SystemClock.elapsedRealtime(), playbackState == Player.STATE_BUFFERING && player?.playWhenReady == true)
+        revealDecodedFrame()
     }
 
     override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
@@ -452,10 +528,31 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
             view?.removeCallbacks(retry)
             channel?.setErrInfo("")
         }
+        revealDecodedFrame()
     }
 
     override fun onTracksChanged(tracks: Tracks) {
-        if (tracks.isEmpty) return
+        if (tracks.isEmpty || tracks != player?.currentTracks) return
+        val hasAlternatives = usingBackup || channel?.getTV()?.let { lookupBackup(it.alias).orEmpty().isNotEmpty() } == true
+        if (RouteQuality.enabled && hasAlternatives && tracks.containsType(C.TRACK_TYPE_AUDIO) &&
+            !tracks.isTypeSupported(C.TRACK_TYPE_AUDIO)) {
+            observation?.let {
+                it.errors++
+                it.unsupportedAudio = true
+            }
+            timing?.event("unsupported_audio")
+            saveObservation("unsupported_audio")
+            forgetCurrentBackup()
+            channel?.let {
+                if (!switchRoute(it)) {
+                    health = null
+                    scheduleMonitor()
+                    player?.stop()
+                    it.setErrInfo("当前线路的音频格式无法播放")
+                }
+            }
+            return
+        }
         val height = selectedHeight ?: return
         if (!setResolution(height)) setResolution(null)
     }

@@ -28,6 +28,21 @@ class RouteQualityTest {
     @Test fun expiredFailureReturnsToCatalogOrder() {
         assertEquals("a", first(mapOf("a" to listOf(sample(errors = 1))), now + RouteQuality.COOLDOWN + 1))
     }
+    @Test fun oneBlipRecoversQuicklyWhileRepeatedFailuresBackOff() {
+        val once = mapOf("a" to listOf(sample(errors = 1)))
+        assertEquals("b", first(once, now + 9_999))
+        assertEquals("a", first(once, now + 10_001))
+        val twice = mapOf("a" to listOf(sample("one", errors = 1), sample("two", errors = 1)))
+        assertEquals("b", first(twice, now + 10_001))
+        assertEquals("a", first(twice, now + 60_001))
+    }
+
+    @Test fun unsupportedAudioKeepsItsPenaltyBeyondATransientBlip() {
+        val records = mapOf("a" to listOf(sample(errors = 1).copy(unsupportedAudio = true)))
+        assertEquals("b", first(records, now + 10_001))
+        assertEquals("a", first(records, now + RouteQuality.COOLDOWN + 1))
+    }
+
     @Test fun removedAndExpiredRoutesDoNotParticipate() {
         assertEquals("a", first(mapOf("missing" to listOf(sample()), "b" to listOf(sample(at = now - RouteQuality.RETENTION - 1)))))
     }

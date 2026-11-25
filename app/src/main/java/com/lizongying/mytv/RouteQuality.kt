@@ -14,7 +14,10 @@ internal data class RouteSample(
     val errors: Int,
     val timeouts: Int,
     val ended: String,
-    val playedMs: Long = 0
+    val playedMs: Long = 0,
+    val avcCompat: Boolean = false,
+    val softwareVideo: Boolean = false,
+    val unsupportedAudio: Boolean = false
 ) {
     val stable get() = frameMs != null && observedMs >= 30_000 && playedMs >= 20_000 && playedMs + bufferMs >= observedMs - 1_500 && errors == 0 &&
         timeouts == 0 && severe == 0 && bufferMs <= 3_000
@@ -42,7 +45,13 @@ internal object RouteQuality {
         fun samples(route: String) = recent(records[route].orEmpty(), now)
         fun cooling(route: String): Boolean {
             val last = samples(route).lastOrNull { it.failed || it.stable } ?: return false
-            return last.failed && now - last.at < COOLDOWN
+            val failures = samples(route).asReversed().takeWhile { !it.stable }.count { it.failed }
+            val delay = when {
+                last.unsupportedAudio || failures >= 3 -> COOLDOWN
+                failures == 2 -> 60_000L
+                else -> 10_000L
+            }
+            return last.failed && now - last.at < delay
         }
         fun category(route: String): Int {
             val history = samples(route)
@@ -77,6 +86,7 @@ internal object RouteQuality {
 
 /** Uses elapsed time for durations and wall time only for persistence/expiry. */
 internal class RouteObservation(val route: String, val pid: String, private val started: Long,
+    private val avcCompat: Boolean = false, private val softwareVideo: Boolean = false,
     private val wall: () -> Long = System::currentTimeMillis) {
     private val id = java.util.UUID.randomUUID().toString()
     private var frame: Long? = null
@@ -86,6 +96,7 @@ internal class RouteObservation(val route: String, val pid: String, private val 
     private var severe = 0
     var errors = 0
     var timeouts = 0
+    var unsupportedAudio = false
     private var playedMs = 0L
     private var lastTick: Long? = null
     private var lastPosition: Long? = null
@@ -128,6 +139,6 @@ internal class RouteObservation(val route: String, val pid: String, private val 
         val current = buffering?.let { now - it } ?: 0
         return RouteSample(id, wall(), frame?.let { now - it } ?: 0, frame?.minus(started),
             width, height, count, total + current, severe + if (current >= 3_000) 1 else 0,
-            errors, timeouts, reason, playedMs)
+            errors, timeouts, reason, playedMs, avcCompat, softwareVideo, unsupportedAudio)
     }
 }

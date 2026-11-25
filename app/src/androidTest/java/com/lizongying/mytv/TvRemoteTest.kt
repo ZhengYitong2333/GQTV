@@ -70,6 +70,9 @@ class TvRemoteTest {
         catalog.last().videoUrl = emptyList()
         instrumentation.runOnMainSync {
             ActivityLifecycleMonitorRegistry.getInstance().addLifecycleCallback(localPlayback)
+            val qualityRecords = catalog.associate { it.pid to SP.routeRecords(it.pid) }
+            val routeMemory = catalog.associate { it.pid to SP.lastBackup(it.pid) }
+            qualityRecords.keys.forEach { SP.writeRouteRecords(it, emptyMap()); SP.rememberBackup(it, null) }
             val last = SP.itemPosition
             val time = SP.time
             val grid = SP.grid
@@ -85,6 +88,9 @@ class TvRemoteTest {
                 SP.channelNum = number
                 SP.bootStartup = boot
                 SP.guid = guid
+                qualityRecords.forEach { (pid, records) -> SP.writeRouteRecords(pid, records) }
+                routeMemory.forEach { (pid, route) -> SP.rememberBackup(pid, route) }
+                SP.flushRouteRecords()
             }
             SP.time = true
             SP.grid = false
@@ -412,6 +418,132 @@ class TvRemoteTest {
         }
     }
 
+    @Test fun qualityWaitsForPlayingBeforeRevealingDecodedFrame() {
+        LocalHls(instrumentation.context.assets).use { server ->
+            var decodedWhileBuffering = false
+            scenario.onActivity { host ->
+                RouteQuality.enabled = true
+                testLines = listOf(server.throttled)
+                catalog[documentaryIndex].backupOnly = true
+                val engine = host.findViewById<PlayerView>(R.id.player_view).player!! as androidx.media3.exoplayer.ExoPlayer
+                engine.addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+                    override fun onRenderedFirstFrame(time: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                        output: Any, renderTimeMs: Long) {
+                        val view = host.findViewById<PlayerView>(R.id.player_view)
+                        val surface = (view.videoSurfaceView as android.view.SurfaceView).holder.surface
+                        if (output === surface && engine.playbackState == androidx.media3.common.Player.STATE_BUFFERING) {
+                            decodedWhileBuffering = true
+                            assertEquals(View.VISIBLE, host.findViewById<View>(R.id.tune_cover).visibility)
+                        }
+                    }
+                })
+                host.play(documentaryIndex)
+            }
+            awaitUi("a decoded frame stays covered during startup buffering", 15_000) { decodedWhileBuffering }
+            awaitUi("picture opens once playback can advance", 15_000) {
+                it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true &&
+                    it.findViewById<View>(R.id.tune_cover).visibility == View.GONE
+            }
+        }
+    }
+
+    @Test fun qualitySkipsAnAudioFormatTheDeviceCannotDecode() {
+        org.junit.Assume.assumeTrue(androidx.media3.exoplayer.mediacodec.MediaCodecSelector.DEFAULT
+            .getDecoderInfos(androidx.media3.common.MimeTypes.AUDIO_MPEG_L2, false, false).isEmpty())
+        LocalHls(instrumentation.context.assets).use { server ->
+            val pid = catalog[documentaryIndex].pid
+            scenario.onActivity {
+                RouteQuality.enabled = true
+                testLines = listOf(server.unsupportedAudio, server.healthy)
+                catalog[documentaryIndex].backupOnly = true
+                it.play(documentaryIndex)
+            }
+            awaitUi("audio-incompatible candidate gives way to playable route", 15_000) {
+                it.playbackSettings().backupPosition() == (2 to 2) &&
+                    it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true
+            }
+            scenario.onActivity {
+                assertTrue(SP.routeRecords(pid).getValue(server.unsupportedAudio).any { sample -> sample.unsupportedAudio && sample.errors > 0 })
+                it.play(documentaryIndex)
+                assertEquals(2 to 2, it.playbackSettings().backupPosition())
+            }
+        }
+    }
+
+    @Test fun qualityReusesAWorkingAvcModeWithoutCallingAShortVisitStable() {
+        org.junit.Assume.assumeTrue(androidx.media3.exoplayer.mediacodec.MediaCodecSelector.DEFAULT
+            .getDecoderInfos(androidx.media3.common.MimeTypes.VIDEO_H264, false, false).any { it.softwareOnly })
+        LocalHls(instrumentation.context.assets).use { server ->
+            var decoder = ""
+            var released = false
+            scenario.onActivity { host ->
+                RouteQuality.enabled = true
+                val short = RouteSample("short-configuration", System.currentTimeMillis(), 500, 20,
+                    960, 540, 0, 0, 0, 0, 0, "retuned", 450, avcCompat = true, softwareVideo = true)
+                assertFalse(short.stable)
+                SP.writeRouteRecords(catalog[documentaryIndex].pid, mapOf(server.healthy to listOf(short)))
+                testLines = listOf(server.healthy)
+                catalog[documentaryIndex].backupOnly = true
+                val engine = host.findViewById<PlayerView>(R.id.player_view).player!! as androidx.media3.exoplayer.ExoPlayer
+                engine.addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+                    override fun onVideoDecoderInitialized(time: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                        name: String, initializedTimestampMs: Long, initializationDurationMs: Long) { decoder = name }
+                    override fun onVideoDecoderReleased(time: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                        name: String) { released = true }
+                })
+                host.play(documentaryIndex)
+            }
+            awaitUi("stored compatible decoder mode reaches real playback", 15_000) {
+                decoder.startsWith("c2.android.") &&
+                    it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true
+            }
+            scenario.onActivity {
+                released = false
+                it.playbackSettings().finishQualityObservation()
+                it.findViewById<PlayerView>(R.id.player_view).player!!.stop()
+            }
+            awaitUi("previous decoder has been released") { released }
+            scenario.onActivity {
+                val stalled = RouteSample("stalled-configuration", System.currentTimeMillis(), 10000, 20,
+                    960, 540, 1, 6000, 1, 0, 0, "retuned", 4000, avcCompat = true, softwareVideo = true)
+                assertFalse(stalled.stable)
+                SP.writeRouteRecords(catalog[documentaryIndex].pid, mapOf(server.healthy to listOf(stalled)))
+                decoder = ""
+                it.play(documentaryIndex)
+            }
+            awaitUi("network stall retains the usable decoder configuration", 15_000) {
+                decoder.startsWith("c2.android.") &&
+                    it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true
+            }
+        }
+    }
+
+    @Test fun qualityTreatsAnEndedLiveBackupAsAFailureAndKeepsPlaying() {
+        LocalHls(instrumentation.context.assets).use { server ->
+            val pid = catalog[documentaryIndex].pid
+            scenario.onActivity {
+                RouteQuality.enabled = true
+                val configuration = RouteSample("short-ended-stream", System.currentTimeMillis(), 500, 20,
+                    960, 540, 0, 0, 0, 0, 0, "retuned", 450, avcCompat = true, softwareVideo = true)
+                SP.writeRouteRecords(pid, mapOf(server.short to listOf(configuration)))
+                testLines = listOf(server.short, server.healthy)
+                catalog[documentaryIndex].backupOnly = true
+                it.play(documentaryIndex)
+            }
+            awaitUi("short candidate is playing") {
+                it.playbackSettings().backupPosition() == (1 to 2) &&
+                    it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true
+            }
+            awaitUi("finite live candidate yields to continuing source", 15_000) {
+                it.playbackSettings().backupPosition() == (2 to 2) &&
+                    it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true
+            }
+            scenario.onActivity {
+                assertTrue(SP.routeRecords(pid).getValue(server.short).any { sample -> sample.errors > 0 && !sample.stable })
+            }
+        }
+    }
+
     @Test fun backupLadderStartsAtTheFirstLineAndReportsItsPosition() {
         scenario.onActivity { host ->
             val channel = browser(host).currentChannel!!
@@ -599,6 +731,7 @@ class TvRemoteTest {
     }
 
     @Test fun heldChannelKeyLimitsRetunesButFreshTapsAreImmediate() {
+        scenario.onActivity { RouteQuality.enabled = true; testLines = emptyList() }
         scenario.onActivity { host ->
             val code = KeyEvent.KEYCODE_CHANNEL_DOWN
             val start = SystemClock.uptimeMillis()
@@ -621,6 +754,8 @@ class TvRemoteTest {
 
     @Test fun delayedOldFrameCannotRevealRapidRetuneToSameUrl() {
         scenario.onActivity { host ->
+            RouteQuality.enabled = true
+            testLines = emptyList()
             val previousView = host.findViewById<PlayerView>(R.id.player_view)
             val oldSurface = (previousView.videoSurfaceView as android.view.SurfaceView).holder.surface
             val engine = previousView.player
@@ -668,6 +803,7 @@ class TvRemoteTest {
     }
 
     @Test fun soleSlowPrimaryCanFinishLoadingAfterTheDeadline() {
+        scenario.onActivity { RouteQuality.enabled = true }
         scenario.onActivity { host ->
             testLines = emptyList()
             browser(host).requestPrimary = { channel ->

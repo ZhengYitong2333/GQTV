@@ -64,8 +64,43 @@ class StableRouteBenchmark {
                     val wait = SystemClock.elapsedRealtime() - start
                     if (shown) {
                         saveScreenshot("quality-$number-$policy-$sample.png")
-                        SystemClock.sleep(if (policy == "long") 300_600L else 30_600L)
-                        if (policy == "long") saveScreenshot("quality-$number-long-end.png")
+                        if (policy == "long") {
+                            var previousCounters: Any? = null
+                            var previousRendered = 0
+                            var previousDropped = 0
+                            var renderedTotal = 0
+                            var droppedTotal = 0
+                            var lastFrameAt: Long? = null
+                            var maxFrameGap = 0L
+                            val until = SystemClock.elapsedRealtime() + 300_600
+                            while (SystemClock.elapsedRealtime() < until) {
+                                scenario!!.onActivity { host ->
+                                    val engine = host.findViewById<androidx.media3.ui.PlayerView>(R.id.player_view).player as androidx.media3.exoplayer.ExoPlayer
+                                    val counters = engine.videoDecoderCounters
+                                    counters?.ensureUpdated()
+                                    val rendered = counters?.renderedOutputBufferCount ?: 0
+                                    val dropped = counters?.droppedBufferCount ?: 0
+                                    if (counters !== previousCounters || rendered < previousRendered) {
+                                        previousRendered = 0
+                                        previousDropped = 0
+                                    }
+                                    val added = (rendered - previousRendered).coerceAtLeast(0)
+                                    renderedTotal += added
+                                    droppedTotal += (dropped - previousDropped).coerceAtLeast(0)
+                                    val now = SystemClock.elapsedRealtime()
+                                    if (engine.isPlaying) {
+                                        lastFrameAt?.let { maxFrameGap = maxOf(maxFrameGap, now - it) }
+                                        if (added > 0 || lastFrameAt == null) lastFrameAt = now
+                                    } else lastFrameAt = null
+                                    previousCounters = counters
+                                    previousRendered = rendered
+                                    previousDropped = dropped
+                                }
+                                SystemClock.sleep(500)
+                            }
+                            Log.i("QualityBench", "video batch=$batch sample=$sample rendered=$renderedTotal dropped=$droppedTotal maxFrameGapMs=$maxFrameGap")
+                            saveScreenshot("quality-$number-long-end.png")
+                        } else SystemClock.sleep(30_600)
                     }
                     scenario!!.onActivity { host ->
                         host.playbackSettings().finishQualityObservation()
@@ -86,7 +121,8 @@ class StableRouteBenchmark {
             }
             scenario?.close()
             scenario = null
-            if (phase == "compare") state.writeText(com.google.gson.Gson().toJson(histories.getValue("new").records))
+            val learned = histories.getValue(if (phase == "compare") "new" else "long").records
+            state.writeText(com.google.gson.Gson().toJson(learned))
         } finally {
             scenario?.close()
             RouteQuality.enabled = true

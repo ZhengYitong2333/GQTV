@@ -17,6 +17,7 @@ internal class LocalHls(assets: AssetManager) : Closeable {
     private val workers = Executors.newCachedThreadPool()
     // The first two byte ranges in 540.m3u8 contain eight seconds of video.
     private val clip = assets.open("resolution-test/540.ts").use { it.readBytes().copyOf(167132) }
+    private val mp2Clip = assets.open("resolution-test/mp2.ts").use { it.readBytes() }
     val firstLoads = AtomicInteger()
     val healthyLoads = AtomicInteger()
     val breakSegment = Semaphore(0)
@@ -25,6 +26,9 @@ internal class LocalHls(assets: AssetManager) : Closeable {
     val silent = "$base/silent.php"
     val broken = "$base/broken.php"
     val healthy = "$base/healthy.php"
+    val short = "$base/short.php"
+    val throttled = "$base/throttled.php"
+    val unsupportedAudio = "$base/mp2.php"
     val invalid = "$base/invalid.php"
 
     private fun playlist(broken: Boolean) = buildString {
@@ -46,6 +50,11 @@ internal class LocalHls(assets: AssetManager) : Closeable {
         val path = reader.readLine()?.split(' ')?.getOrNull(1) ?: return
         while (!reader.readLine().isNullOrEmpty()) Unit
         val body = when (path) {
+            "/short.php" -> "#EXTM3U\n#EXT-X-TARGETDURATION:8\n#EXTINF:8,\nclip.ts\n#EXT-X-ENDLIST\n".toByteArray()
+            "/throttled.php" -> playlist(false).decodeToString().replace("clip.ts", "throttle.ts").toByteArray()
+            "/mp2.php" -> playlist(false).decodeToString().replace("clip.ts", "mp2.ts").toByteArray()
+            "/throttle.ts" -> clip
+            "/mp2.ts" -> mp2Clip
             "/silent.php" -> { Thread.sleep(12_000); playlist(false) }
             "/stalled.php" -> playlist(true).decodeToString().replace("bad.ts", "stall.ts").toByteArray()
             "/stall.ts" -> { Thread.sleep(30_000); clip }
@@ -64,7 +73,13 @@ internal class LocalHls(assets: AssetManager) : Closeable {
         }
         client.getOutputStream().apply {
             write("HTTP/1.1 200 OK\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
-            write(body)
+            if (path == "/throttle.ts") {
+                for (offset in body.indices step 4096) {
+                    write(body, offset, minOf(4096, body.size - offset))
+                    flush()
+                    Thread.sleep(200)
+                }
+            } else write(body)
         }
     }
 
