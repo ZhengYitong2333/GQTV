@@ -72,8 +72,10 @@ internal val backupStreams: Map<String, List<String>> = mapOf(
         "http://222.223.41.27:8888/hls/7/index.m3u8",
         "http://1.24.39.180:9003/hls/7/index.m3u8",
     ),
+    // 2026-11-26: the former 38.* route returned 1080p CCTV-8 in short
+    // sessions but 720p shopping content in the long-play session. Exclude it.
     "CCTV8" to listOf(
-        "http://38.75.136.137:98/gslb/dsdqpub/cctv8hd.m3u8?auth=testpub",
+        "http://173.208.234.146/live/cctv8.m3u8", // Candidate: actual 1080p/AAC, native CCTV-8 logo verified.
         "http://222.223.41.27:8888/hls/8/index.m3u8",
         "http://183.129.255.66:8480/hls/9/index.m3u8",
     ),
