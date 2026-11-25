@@ -20,6 +20,8 @@ internal class TuneTiming(
     private var stallStart: Long? = null
     private var stallCount = 0
     private var stallMs = 0L
+    private var severe = 0
+    private var maxBufferMs = 0L
     private var lastIssue: String? = null
     private var summarized = false
 
@@ -61,7 +63,12 @@ internal class TuneTiming(
             stallCount++
         }
         if (!active || capped == frame + 30_000) {
-            stallStart?.let { stallMs += capped - it }
+            stallStart?.let {
+                val duration = capped - it
+                stallMs += duration
+                maxBufferMs = maxOf(maxBufferMs, duration)
+                if (duration >= 3_000) severe++
+            }
             stallStart = null
         }
         if (now >= frame + 30_000) summarize(30_000)
@@ -76,7 +83,7 @@ internal class TuneTiming(
 
     private fun summarize(duration: Long) {
         summarized = true
-        event("quality", "observedMs=$duration buffers=$stallCount bufferMs=$stallMs")
+        event("quality", "observedMs=$duration buffers=$stallCount bufferMs=$stallMs severe=$severe maxBufferMs=$maxBufferMs")
     }
 
     fun event(name: String, details: String = "") {

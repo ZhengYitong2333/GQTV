@@ -8,7 +8,7 @@
 
 - 遥控器浏览频道、分组跳转、数字定位，确认后切台。播放中轻按上下键立即换台，长按滚动台号，松开后播放目标频道。
 - 67 个内置频道，其中 64 个频道提供共 133 条备用线路。
-- 按设备、频道记住上次连续稳定播放 20 秒的备用地址，下次优先播放，失败后自动切换。
+- 按设备、频道保存近期线路表现，下次优先使用持续播放稳定的线路，失败后自动切换。旧版线路记忆自动作为初始选线提示。
 - 支持选择源内可用的分辨率，显示当前备用线路序号。
 - 半透明侧边设置面板、时间显示和网格频道列表。
 - 从旧版 51 台目录迁移频道位置，之后按频道 PID 保存。
@@ -49,7 +49,7 @@ adb install -r GQTV.apk
 
 调试包输出在 app/build/outputs/apk/debug/app-debug.apk。
 项目随附原生库预编译文件。设备测试使用本地测试视频与 HTTP HLS 服务，覆盖遥控器焦点、选台、分辨率、线路重试、线路记忆和频道迁移。
-播放与选线回归通过 JVM 测试 11 项、Android TV 模拟器测试 19 项。
+JVM 测试覆盖数字选台、换台计时、播放健康和线路排序，Android TV 测试覆盖播放器与遥控器的正常入口。
 
 ### 换台诊断
 
@@ -60,6 +60,21 @@ adb install -r GQTV.apk
 ```sh
 adb -s SERIAL shell am instrument -w -e class com.lizongying.mytv.TuneBenchmark -e policy new -e round 0 com.lizongying.mytv.preview.test/androidx.test.runner.AndroidJUnitRunner
 ```
+
+### 稳定性选源
+
+每条线路保留最近 7 天内最多 8 次播放观察，播放中每 30 秒保存，切台、暂停、退出和失败时立即保存。确认出画后观察至少 30 秒、实际播放进度累计至少 20 秒、没有错误/超时/单次 3 秒缓冲且累计缓冲不超过 3 秒，才会产生稳定记录。短暂扫台保留已经发生的故障与缓冲。
+
+近期失败或严重卡顿的线路降级 10 分钟。已有稳定记录的线路优先；稳定性相近时比较首帧耗时（500 毫秒档位）和实际分辨率。降级期结束后允许按目录顺序重试，成功的后续观察可以恢复优先级。选线只在开始播放或故障恢复时执行。
+
+`StableRouteBenchmark` 对照旧版 20 秒线路记忆和新版质量记录。每个频道、每种策略测 5 次，首次清空历史，其后 4 次保留学习记录，出画后观察 30 秒。测试结束恢复原设备记录。先对 1、2、4、5、8、9 交替执行 old/new，再执行 long；long 使用该频道新版对照中学到的记录，连续观察 5 分钟。
+
+```sh
+adb -s SERIAL shell am instrument -w -e class com.lizongying.mytv.StableRouteBenchmark -e policy new -e channel 1 com.lizongying.mytv.preview.test/androidx.test.runner.AndroidJUnitRunner
+adb -s SERIAL shell am instrument -w -e class com.lizongying.mytv.StableRouteBenchmark -e policy long -e channel 1 com.lizongying.mytv.preview.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+日志 `QualityBench` 标记样本，`TuneTiming` 给出首帧和 30 秒缓冲数据，`RouteRecord` 给出按线路保存的观察，日志只标记线路序号。
 
 ## 上游与版权
 

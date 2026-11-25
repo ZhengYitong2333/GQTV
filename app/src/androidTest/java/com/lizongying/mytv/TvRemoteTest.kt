@@ -57,6 +57,7 @@ class TvRemoteTest {
     }
 
     @Before fun launch() {
+        RouteQuality.enabled = false
         // The test APK owns the clip. Product code still tunes via the normal channel model and Media3.
         val file = File(instrumentation.targetContext.cacheDir, "remote-test.mp4")
         instrumentation.context.assets.open("documentary-test.mp4").use { input ->
@@ -101,6 +102,7 @@ class TvRemoteTest {
 
     @After fun close() {
         if (::scenario.isInitialized) scenario.close()
+        RouteQuality.enabled = true
         catalog.zip(originals).forEach { (channel, original) ->
             channel.backupOnly = original.backupOnly
             channel.videoUrl = original.videoUrl
@@ -331,6 +333,82 @@ class TvRemoteTest {
         assertEquals("digit jump must not tune", documentaryIndex, SP.itemPosition)
         awaitUi("digit overlay hidden") {
             it.findViewById<TextView>(R.id.jump)?.visibility == android.view.View.GONE
+        }
+    }
+
+    @Test fun qualityLearnsAfterRebufferAndSurvivesRestartAndRouteRemoval() {
+        LocalHls(instrumentation.context.assets).use { server ->
+            val pid = catalog[documentaryIndex].pid
+            val original = SP.routeRecords(pid)
+            try {
+                scenario.onActivity {
+                    RouteQuality.enabled = true
+                    SP.writeRouteRecords(pid, emptyMap())
+                    SP.rememberBackup(pid, null)
+                    catalog[documentaryIndex].backupOnly = true
+                    testLines = listOf(server.stalled, server.healthy)
+                    it.play(documentaryIndex)
+                }
+                awaitUi("fast first source renders") {
+                    it.playbackSettings().backupPosition() == (1 to 2) &&
+                        it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true
+                }
+                awaitUi("rebuffer switches to healthy source", 25_000) {
+                    it.playbackSettings().backupPosition() == (2 to 2) &&
+                        it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true
+                }
+                SystemClock.sleep(30_700)
+                scenario.recreate()
+                awaitUi("learned healthy source wins after recreation") {
+                    it.playbackSettings().backupPosition() == (2 to 2) &&
+                        it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true
+                }
+                scenario.onActivity {
+                    val records = SP.routeRecords(pid)
+                    assertTrue(records.getValue(server.stalled).any { s -> s.severe > 0 })
+                    assertTrue(records.getValue(server.healthy).any { s -> s.stable })
+                    // Re-initialization reads the on-disk preference rather than an in-memory ranking.
+                    SP.init(instrumentation.targetContext)
+                    assertTrue(SP.routeRecords(pid).getValue(server.healthy).any { s -> s.stable })
+                    testLines = listOf(server.stalled)
+                    it.play(documentaryIndex)
+                    assertEquals(1 to 1, it.playbackSettings().backupPosition())
+                }
+            } finally {
+                scenario.close()
+                SP.writeRouteRecords(pid, original)
+                RouteQuality.enabled = false
+            }
+        }
+    }
+
+    @Test fun qualityPreviouslyStableSourceFailureAdvancesToRemainingRoute() {
+        LocalHls(instrumentation.context.assets).use { server ->
+            val pid = catalog[documentaryIndex].pid
+            val original = SP.routeRecords(pid)
+            try {
+                scenario.onActivity {
+                    RouteQuality.enabled = true
+                    val stable = RouteSample("previously-stable", System.currentTimeMillis() - 60_000,
+                        30_000, 1000, 960, 540, 0, 0, 0, 0, 0, "stopped", 29_000)
+                    SP.writeRouteRecords(pid, mapOf(server.invalid to listOf(stable)))
+                    testLines = listOf(server.healthy, server.invalid)
+                    catalog[documentaryIndex].backupOnly = true
+                    it.play(documentaryIndex)
+                    assertEquals(2 to 2, it.playbackSettings().backupPosition())
+                }
+                awaitUi("failed previous favorite gives way to remaining line", 20_000) {
+                    it.playbackSettings().backupPosition() == (1 to 2) &&
+                        it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true
+                }
+                scenario.onActivity {
+                    assertTrue(SP.routeRecords(pid).getValue(server.invalid).any { s -> s.errors > 0 })
+                }
+            } finally {
+                scenario.close()
+                SP.writeRouteRecords(pid, original)
+                RouteQuality.enabled = false
+            }
         }
     }
 

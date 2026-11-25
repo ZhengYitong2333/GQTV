@@ -33,6 +33,29 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         val engine = player ?: return@Runnable
         timing?.buffering(engine.playWhenReady && engine.playbackState == Player.STATE_BUFFERING)
     }
+    private var observation: RouteObservation? = null
+    private var nextCheckpoint = 0L
+
+    private fun saveObservation(reason: String) {
+        val sample = observation ?: return
+        SP.saveRoute(sample.pid, sample.route, sample.snapshot(SystemClock.elapsedRealtime(), reason))
+    }
+
+    internal fun checkpointQuality() { saveObservation("observing") }
+
+    private fun beginObservation(route: String) {
+        saveObservation("route_changed")
+        observation = channel?.getTV()?.let { RouteObservation(route, it.pid, SystemClock.elapsedRealtime()) }
+        nextCheckpoint = SystemClock.elapsedRealtime() + 30_000
+    }
+
+    private fun rankedRoutes(model: TVViewModel): List<String> {
+        val tv = model.getTV()
+        val backups = lookupBackup(tv.alias).orEmpty()
+        val routes = if (tv.backupOnly) backups else listOf(RouteQuality.PRIMARY) + backups
+        return RouteQuality.order(routes, SP.routeRecords(tv.pid), SP.lastBackup(tv.pid), System.currentTimeMillis())
+    }
+
     private var timedOut = false
     private val frameListener = object : AnalyticsListener {
         private fun currentLoad(time: AnalyticsListener.EventTime, data: MediaLoadData): Boolean {
@@ -75,14 +98,24 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
             val model = channel ?: return
             val now = SystemClock.elapsedRealtime()
             timing?.buffering(engine.playWhenReady && engine.playbackState == Player.STATE_BUFFERING, now)
+            observation?.progress(now, engine.isPlaying, engine.currentPosition)
+            observation?.videoSize(engine.videoSize.width, engine.videoSize.height)
+            observation?.buffering(now, engine.playWhenReady && engine.playbackState == Player.STATE_BUFFERING)
+            if (now >= nextCheckpoint) {
+                saveObservation("observing")
+                nextCheckpoint = now + 30_000
+            }
             when (health?.sample(now, engine.isPlaying, engine.currentPosition)) {
                 PlaybackHealth.Decision.STABLE -> {
                     failures = 0
-                    SP.rememberBackup(model.getTV().pid, if (usingBackup) backupLines[backupLine] else null)
+                    // Full quality observations take precedence over this legacy migration hint.
+                    if (!RouteQuality.enabled) SP.rememberBackup(model.getTV().pid, if (usingBackup) backupLines[backupLine] else null)
                 }
                 PlaybackHealth.Decision.SLOW -> {
                     if (!timedOut) timing?.event(if (reportedFrame) "stall_limit" else "timeout")
                     timedOut = true
+                    if (!reportedFrame) observation?.let { it.timeouts++ }
+                    saveObservation(if (reportedFrame) "stall_limit" else "timeout")
                     forgetCurrentBackup()
                     if (!switchRoute(model)) {
                         // The last route may recover. Start a fresh observation window.
@@ -135,6 +168,7 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         startAttempt()
         if (usingBackup) {
             timing?.attempt("backup-${backupLine + 1}")
+            beginObservation(backupLines[backupLine])
             prepareMedia()
         } else channel?.changed("retry")
     }
@@ -172,6 +206,7 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
             tuneStarted = SystemClock.elapsedRealtime()
             timing = TuneTiming(model.getTV().alias.ifEmpty { model.getTV().title }, false).also { model.tuneId = it.id }
             timing?.attempt(if (usingBackup) "backup-${backupLine + 1}" else "primary")
+            beginObservation(if (usingBackup) backupLines[backupLine] else RouteQuality.PRIMARY)
             startAttempt()
         }
         prepareMedia()
@@ -182,6 +217,8 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
             view?.removeCallbacks(retry)
             view?.removeCallbacks(finishQualityWindow)
             val replacingChannel = channel != null
+            saveObservation("retuned")
+            observation = null
             timing?.finish("retuned")
             timing = TuneTiming(model.getTV().alias.ifEmpty { model.getTV().title }, cold).also { model.tuneId = it.id }
             tuneStarted = SystemClock.elapsedRealtime()
@@ -203,9 +240,16 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         }
     }
 
-    fun sourceFailed() { timing?.event("source_error") }
+    fun sourceFailed() {
+        timing?.event("source_error")
+        observation?.let { if (it.errors == 0) it.errors++ }
+        saveObservation("source_error")
+    }
 
-    fun beginPrimary() { timing?.attempt("primary") }
+    fun beginPrimary() {
+        timing?.attempt("primary")
+        beginObservation(RouteQuality.PRIMARY)
+    }
 
     fun play(model: TVViewModel) {
         if (channel !== model || usingBackup) return
@@ -217,6 +261,7 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
 
     internal fun hasRememberedBackup(model: TVViewModel): Boolean {
         val tv = model.getTV()
+        if (RouteQuality.enabled) return rankedRoutes(model).firstOrNull()?.let { it != RouteQuality.PRIMARY } == true
         val remembered = SP.lastBackup(tv.pid) ?: return false
         if (remembered in lookupBackup(tv.alias).orEmpty()) return true
         SP.rememberBackup(tv.pid, null)
@@ -230,7 +275,9 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         if (backupLines.isEmpty()) return false
         val preferred = backupLines.indexOf(SP.lastBackup(tv.pid))
         val indices = backupLines.indices.filter { it != preferred }
-        remainingLines = (if (preferred >= 0) listOf(preferred) + indices else indices).iterator()
+        remainingLines = if (RouteQuality.enabled) {
+            rankedRoutes(model).filter { it != RouteQuality.PRIMARY }.map { backupLines.indexOf(it) }.iterator()
+        } else (if (preferred >= 0) listOf(preferred) + indices else indices).iterator()
         primaryStillAvailable = beforePrimary && !tv.backupOnly
         return advanceBackup()
     }
@@ -248,6 +295,7 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         failures = 0
         setVideoTrack(null)
         timing?.attempt("backup-${next + 1}")
+        beginObservation(backupLines[next])
         media = MediaItem.Builder().setUri(backupLines[next]).setMimeType(MimeTypes.APPLICATION_M3U8).build()
         prepareMedia()
         return true
@@ -316,6 +364,8 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
     override fun onPlayerError(error: PlaybackException) {
         val model = channel ?: return
         timing?.event("playback_error", "code=${error.errorCode}")
+        observation?.let { it.errors++ }
+        saveObservation("playback_error")
         health = null
         scheduleMonitor()
         if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
@@ -363,6 +413,8 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         if (reportedFrame) return
         reportedFrame = true
         health?.rendered()
+        observation?.rendered(SystemClock.elapsedRealtime(), player?.videoSize?.width ?: 0, player?.videoSize?.height ?: 0)
+        nextCheckpoint = SystemClock.elapsedRealtime() + 30_000
         if (timing?.frame(player?.videoSize?.width ?: 0, player?.videoSize?.height ?: 0) == true) {
             view?.postDelayed(finishQualityWindow, 30_000)
             val route = backupPosition()?.let { (line, count) -> "备用 $line/$count" } ?: "主源"
@@ -372,12 +424,18 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
 
     override fun onPlaybackStateChanged(playbackState: Int) {
         timing?.buffering(playbackState == Player.STATE_BUFFERING && player?.playWhenReady == true)
+        observation?.buffering(SystemClock.elapsedRealtime(), playbackState == Player.STATE_BUFFERING && player?.playWhenReady == true)
         health?.buffering(SystemClock.elapsedRealtime(), playbackState == Player.STATE_BUFFERING && player?.playWhenReady == true)
     }
 
     override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-        if (!playWhenReady) health = null
-        else if (health == null && media != null) {
+        if (!playWhenReady) {
+            saveObservation("paused")
+            observation = null
+            health = null
+        } else if (health == null && media != null) {
+            beginObservation(if (usingBackup) backupLines[backupLine] else RouteQuality.PRIMARY)
+            if (reportedFrame) observation?.rendered(SystemClock.elapsedRealtime(), player?.videoSize?.width ?: 0, player?.videoSize?.height ?: 0)
             health = PlaybackHealth(SystemClock.elapsedRealtime())
             if (reportedFrame) health?.rendered()
             player?.let { onPlaybackStateChanged(it.playbackState) }
@@ -400,6 +458,9 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
 
     override fun onStop() {
         view?.removeCallbacks(finishQualityWindow)
+        saveObservation("stopped")
+        SP.flushRouteRecords()
+        observation = null
         timing?.finish("stopped")
         timing = null
         health = null

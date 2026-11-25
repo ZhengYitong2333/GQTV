@@ -31,6 +31,8 @@ object SP {
 
     private lateinit var playbackRoutes: SharedPreferences
 
+    private lateinit var routeQuality: SharedPreferences
+
     private var listener: OnSharedPreferenceChangeListener? = null
 
     /**
@@ -39,6 +41,7 @@ object SP {
     fun init(context: Context) {
         sp = context.getSharedPreferences(SP_FILE_NAME, Context.MODE_PRIVATE)
         playbackRoutes = context.getSharedPreferences("stable_playback_routes", Context.MODE_PRIVATE)
+        routeQuality = context.getSharedPreferences("route_quality_v1", Context.MODE_PRIVATE)
     }
 
     fun setOnSharedPreferenceChangeListener(listener: OnSharedPreferenceChangeListener) {
@@ -55,8 +58,30 @@ object SP {
         if (pid.isNotEmpty() && lastBackup(pid) != url) playbackRoutes.edit().putString(pid, url).apply()
     }
 
+    internal fun routeRecords(pid: String): Map<String, List<RouteSample>> {
+        val type = object : com.google.gson.reflect.TypeToken<Map<String, List<RouteSample>>>() {}.type
+        return runCatching {
+            com.google.gson.Gson().fromJson<Map<String, List<RouteSample>>>(routeQuality.getString(pid, "{}"), type)
+        }.getOrNull() ?: emptyMap()
+    }
+
+    internal fun saveRoute(pid: String, route: String, sample: RouteSample) {
+        if (!RouteQuality.enabled || pid.isEmpty()) return
+        val records = routeRecords(pid).mapValues { (_, samples) -> RouteQuality.recent(samples, sample.at) }.toMutableMap()
+        records[route] = (records[route].orEmpty().filter { it.id != sample.id } + sample).takeLast(8)
+        writeRouteRecords(pid, records)
+    }
+
+    internal fun writeRouteRecords(pid: String, records: Map<String, List<RouteSample>>) {
+        routeQuality.edit().putString(pid, com.google.gson.Gson().toJson(records)).apply()
+    }
+
+    // Wait for pending apply() writes only after playback stops.
+    internal fun flushRouteRecords(): Boolean = routeQuality.edit().commit()
+
     fun resetSettings() {
         playbackRoutes.edit().clear().apply()
+        routeQuality.edit().clear().apply()
         sp.edit().remove(KEY_CHANNEL_REVERSAL).remove(KEY_CHANNEL_NUM).remove(KEY_TIME)
             .remove(KEY_GRID).remove(KEY_BOOT_STARTUP).remove(KEY_GUID).apply()
         listener?.onSharedPreferenceChanged(KEY_GRID)
