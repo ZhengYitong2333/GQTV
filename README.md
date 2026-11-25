@@ -67,10 +67,10 @@ adb -s SERIAL shell am instrument -w -e class com.lizongying.mytv.TuneBenchmark 
 
 近期失败或严重卡顿的线路降级 10 分钟。已有稳定记录的线路优先；稳定性相近时比较首帧耗时（500 毫秒档位）和实际分辨率。降级期结束后允许按目录顺序重试，成功的后续观察可以恢复优先级。选线只在开始播放或故障恢复时执行。
 
-`StableRouteBenchmark` 对照旧版 20 秒线路记忆和新版质量记录。每个频道、每种策略测 5 次，首次清空历史，其后 4 次保留学习记录，出画后观察 30 秒。测试结束恢复原设备记录。先对 1、2、4、5、8、9 交替执行 old/new，再执行 long；long 使用该频道新版对照中学到的记录，连续观察 5 分钟。
+`StableRouteBenchmark` 对照旧版 20 秒线路记忆和新版质量记录。每个频道、每种策略测 5 次，首次清空历史，其后 4 次保留学习记录，出画后观察 30 秒。测试结束恢复原设备记录。先对 1、2、4、5、8、9 执行 compare（逐次交替 old/new，两组独立保留历史），再执行 long；long 使用该频道新版对照中学到的记录，连续观察 5 分钟。
 
 ```sh
-adb -s SERIAL shell am instrument -w -e class com.lizongying.mytv.StableRouteBenchmark -e policy new -e channel 1 com.lizongying.mytv.preview.test/androidx.test.runner.AndroidJUnitRunner
+adb -s SERIAL shell am instrument -w -e class com.lizongying.mytv.StableRouteBenchmark -e policy compare -e channel 1 com.lizongying.mytv.preview.test/androidx.test.runner.AndroidJUnitRunner
 adb -s SERIAL shell am instrument -w -e class com.lizongying.mytv.StableRouteBenchmark -e policy long -e channel 1 com.lizongying.mytv.preview.test/androidx.test.runner.AndroidJUnitRunner
 ```
 

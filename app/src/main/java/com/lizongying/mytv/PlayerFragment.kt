@@ -41,7 +41,11 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         SP.saveRoute(sample.pid, sample.route, sample.snapshot(SystemClock.elapsedRealtime(), reason))
     }
 
-    internal fun checkpointQuality() { saveObservation("observing") }
+    // A comparison arm owns its observation until its history has been captured.
+    internal fun finishQualityObservation() {
+        saveObservation("benchmark_sample")
+        observation = null
+    }
 
     private fun beginObservation(route: String) {
         saveObservation("route_changed")

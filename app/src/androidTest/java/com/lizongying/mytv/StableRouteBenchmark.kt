@@ -10,13 +10,15 @@ import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
 
-/** Opt-in, isolated live comparison of the pre-change memory policy and quality learning. */
+/** Opt-in paired comparison. Each arm owns its own persisted history. */
 class StableRouteBenchmark {
+    private data class History(val records: Map<String, List<RouteSample>>, val remembered: String?)
+
     @Test fun measure() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val args = InstrumentationRegistry.getArguments()
-        val policy = args.getString("policy") ?: return
-        assumeTrue(policy in listOf("old", "new", "long"))
+        val phase = args.getString("policy") ?: return
+        assumeTrue(phase in listOf("compare", "long"))
         val number = args.getString("channel")!!.toInt()
         val channel = TVList.list.values.flatten()[number - 1]
         val saved = SP.routeRecords(channel.pid)
@@ -24,63 +26,84 @@ class StableRouteBenchmark {
         val position = SP.itemPosition
         val state = File(instrumentation.targetContext.filesDir, "quality-bench-$number.json")
         var scenario: ActivityScenario<MainActivity>? = null
-        val batch = "$number-$policy"
+        val histories = mutableMapOf("old" to History(emptyMap(), null), "new" to History(emptyMap(), null))
         try {
-            RouteQuality.enabled = policy != "old"
-            SP.rememberBackup(channel.pid, null)
-            SP.writeRouteRecords(channel.pid, emptyMap())
-            if (policy == "long" && state.exists()) {
+            if (phase == "long" && state.exists()) {
                 val type = object : com.google.gson.reflect.TypeToken<Map<String, List<RouteSample>>>() {}.type
-                SP.writeRouteRecords(channel.pid, com.google.gson.Gson().fromJson(state.readText(), type))
+                histories["long"] = History(com.google.gson.Gson().fromJson(state.readText(), type), null)
+            } else histories["long"] = History(emptyMap(), null)
+            for (policy in if (phase == "long") listOf("long") else listOf("old", "new")) {
+                Log.i("QualityBench", "baseline batch=$number-$policy ids=" + histories.getValue(policy).records.values.flatten().joinToString(",") { it.id })
             }
-            Log.i("QualityBench", "baseline batch=$batch ids=" + SP.routeRecords(channel.pid).values.flatten().joinToString(",") { it.id })
-            repeat(if (policy == "long") 1 else 5) { sample ->
-                val mode = if (policy == "long") "long" else if (sample == 0) "cold" else "remembered"
-                Log.i("QualityBench", "begin batch=$batch channel=CCTV$number mode=$mode sample=$sample")
-                val start = SystemClock.elapsedRealtime()
-                if (scenario == null) {
-                    SP.itemPosition = number - 1
-                    scenario = ActivityScenario.launch(MainActivity::class.java)
-                } else scenario!!.onActivity { it.play(number - 1) }
-                var shown = false
-                while (!shown && SystemClock.elapsedRealtime() - start < 25_000) {
+            repeat(if (phase == "long") 1 else 5) { sample ->
+                val policies = if (phase == "long") listOf("long") else
+                    if ((sample + number) % 2 == 0) listOf("new", "old") else listOf("old", "new")
+                for (policy in policies) {
+                    val history = histories.getValue(policy)
+                    val mode = if (policy == "long") "long" else if (sample == 0) "cold" else "remembered"
+                    val batch = "$number-$policy"
+                    Log.i("QualityBench", "begin batch=$batch channel=CCTV$number mode=$mode sample=$sample")
+                    val start = SystemClock.elapsedRealtime()
+                    if (scenario == null) {
+                        RouteQuality.enabled = policy != "old"
+                        SP.writeRouteRecords(channel.pid, history.records)
+                        SP.rememberBackup(channel.pid, history.remembered)
+                        SP.itemPosition = number - 1
+                        scenario = ActivityScenario.launch(MainActivity::class.java)
+                    } else scenario!!.onActivity {
+                        RouteQuality.enabled = policy != "old"
+                        SP.writeRouteRecords(channel.pid, history.records)
+                        SP.rememberBackup(channel.pid, history.remembered)
+                        it.play(number - 1)
+                    }
+                    var shown = false
+                    while (!shown && SystemClock.elapsedRealtime() - start < 25_000) {
+                        scenario!!.onActivity { host -> shown = host.findViewById<View>(R.id.tune_cover)?.visibility == View.GONE }
+                        if (!shown) SystemClock.sleep(50)
+                    }
+                    val wait = SystemClock.elapsedRealtime() - start
+                    if (shown) {
+                        saveScreenshot("quality-$number-$policy-$sample.png")
+                        SystemClock.sleep(if (policy == "long") 300_600L else 30_600L)
+                        if (policy == "long") saveScreenshot("quality-$number-long-end.png")
+                    }
                     scenario!!.onActivity { host ->
-                        shown = host.findViewById<View>(R.id.tune_cover)?.visibility == View.GONE
-                    }
-                    if (!shown) SystemClock.sleep(50)
-                }
-                val wait = SystemClock.elapsedRealtime() - start
-                val observe = if (policy == "long") 300_600L else 30_600L
-                if (shown) {
-                    instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
-                        File(instrumentation.targetContext.filesDir, "quality-$number-$policy-$sample.png").outputStream().use {
-                            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+                        host.playbackSettings().finishQualityObservation()
+                        val records = SP.routeRecords(channel.pid)
+                        records.forEach { (route, observations) ->
+                            val line = if (route == RouteQuality.PRIMARY) "primary" else "backup-${backupSource(channel.alias).orEmpty().indexOf(route) + 1}"
+                            observations.forEach { record -> Log.i("RouteRecord", "batch=$batch sample=$sample route=$line data=" + com.google.gson.Gson().toJson(record)) }
                         }
-                        bitmap.recycle()
+                        histories[policy] = History(records, SP.lastBackup(channel.pid))
                     }
-                    SystemClock.sleep(observe)
-                }
-                // Stop flushes the active observation without changing channel history.
-                scenario!!.onActivity { host ->
-                    val player = host.playbackSettings()
-                    player.checkpointQuality()
-                    val records = SP.routeRecords(channel.pid)
-                    records.forEach { (route, observations) ->
-                        val line = if (route == RouteQuality.PRIMARY) "primary" else "backup-${backupSource(channel.alias).orEmpty().indexOf(route) + 1}"
-                        observations.forEach { record -> Log.i("RouteRecord", "batch=$batch sample=$sample route=$line data=" + com.google.gson.Gson().toJson(record)) }
+                    Log.i("QualityBench", "sample batch=$batch channel=CCTV$number mode=$mode sample=$sample shown=$shown waitMs=$wait")
+                    // Both no-history observations start with a fresh activity/player.
+                    if (sample == 0 && phase == "compare" && policy == policies.first()) {
+                        scenario?.close()
+                        scenario = null
                     }
                 }
-                Log.i("QualityBench", "sample batch=$batch channel=CCTV$number mode=$mode sample=$sample shown=$shown waitMs=$wait")
             }
             scenario?.close()
             scenario = null
-            if (policy == "new") state.writeText(com.google.gson.Gson().toJson(SP.routeRecords(channel.pid)))
+            if (phase == "compare") state.writeText(com.google.gson.Gson().toJson(histories.getValue("new").records))
         } finally {
             scenario?.close()
             RouteQuality.enabled = true
             SP.writeRouteRecords(channel.pid, saved)
             SP.rememberBackup(channel.pid, memory)
             SP.itemPosition = position
+            SP.flushRouteRecords()
+        }
+    }
+
+    private fun saveScreenshot(name: String) {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
+            File(instrumentation.targetContext.filesDir, name).outputStream().use {
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+            }
+            bitmap.recycle()
         }
     }
 }
