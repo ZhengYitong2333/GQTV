@@ -407,6 +407,8 @@ class PlayerFragment : Fragment(R.layout.player), Player.Listener {
         if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
             if (!recoveredLiveWindow) {
                 recoveredLiveWindow = true
+                timing?.event("live_window_recovery")
+                beginObservation(if (usingBackup) backupLines[backupLine] else RouteQuality.PRIMARY)
                 startAttempt()
                 player?.seekToDefaultPosition()
                 player?.prepare()

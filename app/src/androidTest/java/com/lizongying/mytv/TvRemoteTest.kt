@@ -838,6 +838,7 @@ class TvRemoteTest {
     @Test fun expiredLiveWindowGetsOneRecoveryBeforeAdvancing() {
         LocalHls(instrumentation.context.assets).use { server ->
             scenario.onActivity {
+                RouteQuality.enabled = true
                 testLines = listOf(server.healthy, server.stalled)
                 SP.rememberBackup(catalog[documentaryIndex].pid, server.healthy)
                 it.play(documentaryIndex)
@@ -846,14 +847,24 @@ class TvRemoteTest {
                 it.playbackSettings().backupPosition() == (1 to 2) &&
                     it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true
             }
+            SystemClock.sleep(500)
             scenario.onActivity {
                 val error = androidx.media3.common.PlaybackException("expired", null,
                     androidx.media3.common.PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW)
                 val player = it.playbackSettings()
                 player.onPlayerError(error)
                 assertEquals(1 to 2, player.backupPosition())
-                player.onPlayerError(error)
-                assertEquals(2 to 2, player.backupPosition())
+            }
+            awaitUi("in-place live recovery reveals a playable frame") {
+                it.findViewById<PlayerView>(R.id.player_view).player?.isPlaying == true &&
+                    it.findViewById<View>(R.id.tune_cover).visibility == View.GONE
+            }
+            scenario.onActivity {
+                val error = androidx.media3.common.PlaybackException("expired again", null,
+                    androidx.media3.common.PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW)
+                it.playbackSettings().onPlayerError(error)
+                assertEquals(2 to 2, it.playbackSettings().backupPosition())
+                assertEquals(2, SP.routeRecords(catalog[documentaryIndex].pid).getValue(server.healthy).count { sample -> sample.errors > 0 })
             }
         }
     }

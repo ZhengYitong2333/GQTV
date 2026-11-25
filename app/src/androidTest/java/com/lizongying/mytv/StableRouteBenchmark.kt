@@ -89,8 +89,8 @@ class StableRouteBenchmark {
                                     droppedTotal += (dropped - previousDropped).coerceAtLeast(0)
                                     val now = SystemClock.elapsedRealtime()
                                     if (engine.isPlaying) {
-                                        lastFrameAt?.let { maxFrameGap = maxOf(maxFrameGap, now - it) }
                                         if (added > 0 || lastFrameAt == null) lastFrameAt = now
+                                        else maxFrameGap = maxOf(maxFrameGap, now - lastFrameAt!!)
                                     } else lastFrameAt = null
                                     previousCounters = counters
                                     previousRendered = rendered
