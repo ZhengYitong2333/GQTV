@@ -29,8 +29,11 @@ internal val backupStreams: Map<String, List<String>> = mapOf(
         "http://38.75.136.137:98/gslb/dsdqpub/cctv1hd.m3u8?auth=testpub",
         "http://1.24.39.180:9003/hls/1/index.m3u8",
     ),
+    // 2026-11-25: exclude the shopping redirect and quarantine unverified ad feeds
+    // for CCTV-2/8/9. Keep the independently verified CCTV-1 route.
     "CCTV2" to listOf(
-        "http://74.91.26.218:82/live/cctv2hd.m3u8", // 720p
+        "http://173.208.212.130:8181/1080p/cctv2.m3u8", // Actual 720p/AAC, channel logo checked 2026-11-25.
+        "http://204.12.221.218:8181/3m1080p/cctv2.m3u8", // Actual 720p/AAC; separate resolved origin.
         "http://222.223.41.27:8888/hls/2/index.m3u8",
         "http://1.24.39.180:9003/hls/2/index.m3u8",
     ),
@@ -70,15 +73,13 @@ internal val backupStreams: Map<String, List<String>> = mapOf(
         "http://1.24.39.180:9003/hls/7/index.m3u8",
     ),
     "CCTV8" to listOf(
-        "http://74.91.26.218:82/live/cctv8hd.m3u8", // 720p
+        "http://38.75.136.137:98/gslb/dsdqpub/cctv8hd.m3u8?auth=testpub",
         "http://222.223.41.27:8888/hls/8/index.m3u8",
         "http://183.129.255.66:8480/hls/9/index.m3u8",
-        "http://38.75.136.137:98/gslb/dsdqpub/cctv8hd.m3u8?auth=testpub",
     ),
     "CCTV9" to listOf(
-        "http://221.7.175.154:8445/tsfile/live/1007_1.m3u8?key=txiptv&playlive=1&authid=0",
-        "http://74.91.26.218:82/live/cctv9hd.m3u8", // 720p
         "http://38.75.136.137:98/gslb/dsdqpub/cctv9hd.m3u8?auth=testpub",
+        "http://221.7.175.154:8445/tsfile/live/1007_1.m3u8?key=txiptv&playlive=1&authid=0",
         "http://222.223.41.27:8888/hls/9/index.m3u8",
         "http://1.24.39.180:9003/hls/9/index.m3u8",
     ),

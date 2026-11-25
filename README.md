@@ -65,7 +65,7 @@ adb -s SERIAL shell am instrument -w -e class com.lizongying.mytv.TuneBenchmark 
 
 每条线路保留最近 7 天内最多 8 次播放观察，其中最多保留两次短暂扫台，避免挤掉稳定与故障记录。播放中每 30 秒保存，切台、暂停、退出和失败时立即保存。确认出画后观察至少 30 秒、按实际渲染帧推进累计至少 20 秒（不使用会随 HLS 直播窗口滑动而回退的相对播放位置）、播放与缓冲能覆盖观察时长（容许 1.5 秒采样误差）、没有错误/超时/单次 3 秒缓冲且累计缓冲不超过 3 秒，才会产生稳定记录。短暂扫台保留已经发生的故障与缓冲。
 
-首次失败降级 10 秒，连续失败逐步延长到 1 分钟、10 分钟。已声明音轨却缺少可用音频解码器的线路降级 10 分钟。已有稳定记录的线路优先；稳定性相近时比较首帧耗时（500 毫秒档位）和实际分辨率。降级期结束后允许按目录顺序重试，成功的后续观察可以恢复优先级。选线只在开始播放或故障恢复时执行。
+首次失败降级 10 秒，连续失败逐步延长到 1 分钟、10 分钟。已声明音轨却缺少可用音频解码器的线路降级 10 分钟。已有稳定记录的线路优先；稳定性相近时先比较实际分辨率，再比较首帧耗时（500 毫秒档位）。降级期结束后允许按目录顺序重试，成功的后续观察可以恢复优先级。选线只在开始播放或故障恢复时执行。
 
 解码首帧到达后，等待播放器就绪再揭开画面遮挡。日志 `decoded_frame` 记录解码时刻，`first_frame` 记录实际显示时刻，首帧后的缓冲从实际显示开始计数。
 
@@ -77,6 +77,8 @@ AVC 解析或解码失败时，在现有的一次线路重试内尝试连续 HLS
 adb -s SERIAL shell am instrument -w -e class com.lizongying.mytv.StableRouteBenchmark -e policy compare -e channel 1 com.lizongying.mytv.preview.test/androidx.test.runner.AndroidJUnitRunner
 adb -s SERIAL shell am instrument -w -e class com.lizongying.mytv.StableRouteBenchmark -e policy long -e channel 1 com.lizongying.mytv.preview.test/androidx.test.runner.AndroidJUnitRunner
 ```
+
+源目录调整的对照可附加 `-e catalogBaseline 20261125`：旧策略使用调整前的目录快照，新策略使用当前目录，首次无历史启动也会切换正确目录。测试会校验实际加载地址属于当前组，结束后恢复生产目录。
 
 日志 `QualityBench` 标记样本，`TuneTiming` 给出首帧和 30 秒缓冲数据，`RouteRecord` 给出按线路保存的观察，日志只标记线路序号。
 

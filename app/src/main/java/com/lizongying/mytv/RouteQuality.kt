@@ -77,8 +77,8 @@ internal object RouteQuality {
         }
         return routes.sortedWith(compareBy<String> { category(it) }
             .thenBy { errorRate(it) }.thenBy { bufferRate(it) }
-            .thenBy { frameBucket(it) }
             .thenByDescending { samples(it).lastOrNull { s -> s.stable }?.height ?: 0 }
+            .thenBy { frameBucket(it) }
             .thenBy { if (it == remembered) 0 else 1 }
             .thenBy { routes.indexOf(it) })
     }

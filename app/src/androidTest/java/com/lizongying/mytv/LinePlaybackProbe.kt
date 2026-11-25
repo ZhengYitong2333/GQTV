@@ -31,7 +31,7 @@ class LinePlaybackProbe {
         var originalEngine: androidx.media3.exoplayer.ExoPlayer? = null
         val seconds = args.getString("seconds")?.toLong() ?: 35L
         val channel = TVList.list.values.flatten()[number!! - 1]
-        val uri = backupSource(channel.alias)!![line - 1]
+        val uri = args.getString("uri") ?: backupSource(channel.alias)!![line - 1]
         val originalBackupOnly = channel.backupOnly
         val position = SP.itemPosition
         val originalRecords = SP.routeRecords(channel.pid)
@@ -60,6 +60,7 @@ class LinePlaybackProbe {
             scenario = ActivityScenario.launch(MainActivity::class.java)
             scenario.onActivity { host ->
                 val original = host.findViewById<PlayerView>(R.id.player_view).player!! as androidx.media3.exoplayer.ExoPlayer
+                check(original.currentMediaItem?.localConfiguration?.uri.toString() == uri) { "Probe did not select its requested URI" }
                 originalEngine = original
                 original.removeListener(host.playbackSettings())
                 val item = original.currentMediaItem!!
@@ -136,7 +137,10 @@ class LinePlaybackProbe {
                 val counters = (host.findViewById<PlayerView>(R.id.player_view).player as androidx.media3.exoplayer.ExoPlayer).videoDecoderCounters
                 counters?.ensureUpdated()
                 Log.i("LineProbe", "video rendered=${counters?.renderedOutputBufferCount} dropped=${counters?.droppedBufferCount} maxFrameGapMs=$maxFrameGap")
-                Log.i("LineProbe", "audio mime=" + (host.findViewById<PlayerView>(R.id.player_view).player as androidx.media3.exoplayer.ExoPlayer).audioFormat?.sampleMimeType)
+                val measuredEngine = host.findViewById<PlayerView>(R.id.player_view).player as androidx.media3.exoplayer.ExoPlayer
+                Log.i("LineProbe", "audio mime=" + measuredEngine.audioFormat?.sampleMimeType +
+                    " declared=" + measuredEngine.currentTracks.containsType(androidx.media3.common.C.TRACK_TYPE_AUDIO) +
+                    " supported=" + measuredEngine.currentTracks.isTypeSupported(androidx.media3.common.C.TRACK_TYPE_AUDIO))
                 Log.i("LineProbe", "result channel=$number line=$line compat=$compatible software=$software data=" +
                 com.google.gson.Gson().toJson(observation?.snapshot(SystemClock.elapsedRealtime(), "probe"))) }
         } finally {

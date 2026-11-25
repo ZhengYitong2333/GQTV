@@ -21,6 +21,17 @@ class StableRouteBenchmark {
         assumeTrue(phase in listOf("compare", "long"))
         val number = args.getString("channel")!!.toInt()
         val channel = TVList.list.values.flatten()[number - 1]
+        // Opt-in source-cleanup comparison: preserve the pre-cleanup catalog for
+        // the old arm, including on its first no-history activity launch.
+        @Suppress("UNCHECKED_CAST")
+        val catalog = backupStreams as MutableMap<String, List<String>>
+        val currentLines = backupSource(channel.alias).orEmpty().toList()
+        val oldLines = if (args.getString("catalogBaseline") == "20261125") {
+            val type = object : com.google.gson.reflect.TypeToken<Map<String, List<String>>>() {}.type
+            val baseline: Map<String, List<String>> = com.google.gson.Gson().fromJson(
+                instrumentation.context.assets.open("source-baseline-20261125.json").bufferedReader().use { it.readText() }, type)
+            baseline[channel.alias] ?: currentLines
+        } else currentLines
         val saved = SP.routeRecords(channel.pid)
         val memory = SP.lastBackup(channel.pid)
         val position = SP.itemPosition
@@ -39,18 +50,23 @@ class StableRouteBenchmark {
                 val policies = if (phase == "long") listOf("long") else
                     if ((sample + number) % 2 == 0) listOf("new", "old") else listOf("old", "new")
                 for (policy in policies) {
+                    val lines = if (policy == "old") oldLines else currentLines
                     val history = histories.getValue(policy)
                     val mode = if (policy == "long") "long" else if (sample == 0) "cold" else "remembered"
                     val batch = "$number-$policy"
                     Log.i("QualityBench", "begin batch=$batch channel=CCTV$number mode=$mode sample=$sample")
                     val start = SystemClock.elapsedRealtime()
                     if (scenario == null) {
-                        RouteQuality.enabled = policy != "old"
-                        SP.writeRouteRecords(channel.pid, history.records)
-                        SP.rememberBackup(channel.pid, history.remembered)
-                        SP.itemPosition = number - 1
+                        instrumentation.runOnMainSync {
+                            catalog[channel.alias] = lines
+                            RouteQuality.enabled = policy != "old"
+                            SP.writeRouteRecords(channel.pid, history.records)
+                            SP.rememberBackup(channel.pid, history.remembered)
+                            SP.itemPosition = number - 1
+                        }
                         scenario = ActivityScenario.launch(MainActivity::class.java)
                     } else scenario!!.onActivity {
+                        catalog[channel.alias] = lines
                         RouteQuality.enabled = policy != "old"
                         SP.writeRouteRecords(channel.pid, history.records)
                         SP.rememberBackup(channel.pid, history.remembered)
@@ -63,6 +79,14 @@ class StableRouteBenchmark {
                     }
                     val wait = SystemClock.elapsedRealtime() - start
                     if (shown) {
+                        scenario!!.onActivity { host ->
+                            val engine = host.findViewById<androidx.media3.ui.PlayerView>(R.id.player_view).player!!
+                            if (host.playbackSettings().isUsingBackup()) {
+                                check(engine.currentMediaItem?.localConfiguration?.uri.toString() in lines) {
+                                    "Measured route does not belong to the active comparison catalog"
+                                }
+                            }
+                        }
                         saveScreenshot("quality-$number-$policy-$sample.png")
                         if (policy == "long") {
                             var previousCounters: Any? = null
@@ -100,7 +124,12 @@ class StableRouteBenchmark {
                             }
                             Log.i("QualityBench", "video batch=$batch sample=$sample rendered=$renderedTotal dropped=$droppedTotal maxFrameGapMs=$maxFrameGap")
                             saveScreenshot("quality-$number-long-end.png")
-                        } else SystemClock.sleep(30_600)
+                        } else {
+                            SystemClock.sleep(30_600)
+                            // The first-frame screenshot may precede compositor
+                            // presentation; retain a settled content-check image.
+                            saveScreenshot("quality-$number-$policy-$sample-end.png")
+                        }
                     }
                     scenario!!.onActivity { host ->
                         host.playbackSettings().finishQualityObservation()
@@ -125,6 +154,7 @@ class StableRouteBenchmark {
             state.writeText(com.google.gson.Gson().toJson(learned))
         } finally {
             scenario?.close()
+            catalog[channel.alias] = currentLines
             RouteQuality.enabled = true
             SP.writeRouteRecords(channel.pid, saved)
             SP.rememberBackup(channel.pid, memory)

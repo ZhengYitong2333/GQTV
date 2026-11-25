@@ -50,6 +50,24 @@ class RouteQualityTest {
         assertEquals("b", first(mapOf("a" to listOf(sample(height = 720)), "b" to listOf(sample()))))
         assertEquals("b", RouteQuality.order(listOf("a", "b"), emptyMap(), "b", now).first())
     }
+    @Test fun equallySmoothRoutesPreferActualResolutionBeforeStartupSpeed() {
+        assertEquals("b", first(mapOf(
+            "a" to listOf(sample(frame = 500, height = 720)),
+            "b" to listOf(sample(frame = 2500, height = 1080)))))
+    }
+    @Test fun verifiedUnchangedChannelsKeepTheirSelectedRoutes() {
+        val root = javaClass.getResourceAsStream("/verified-route-history-20261125.json")!!.reader().use {
+            com.google.gson.JsonParser.parseReader(it).asJsonObject
+        }
+        val type = object : com.google.gson.reflect.TypeToken<Map<String, List<RouteSample>>>() {}.type
+        root.entrySet().forEach { (alias, fixture) ->
+            val row = fixture.asJsonObject
+            val records: Map<String, List<RouteSample>> = com.google.gson.Gson().fromJson(row["records"], type)
+            val at = records.values.flatten().maxOf { it.at }
+            assertEquals(alias, row["expected"].asString,
+                RouteQuality.order(backupSource(alias)!!, records, null, at).first())
+        }
+    }
     @Test fun activeBufferAndErrorsSurviveRetuning() {
         val observation = RouteObservation("a", "channel", 0) { now }
         observation.rendered(100, 1920, 1080)
